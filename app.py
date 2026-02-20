@@ -102,6 +102,21 @@ SCOPES = [
 ]
 
 
+def _fix_private_key(key_str):
+    """Fix common private key formatting issues from TOML parsing."""
+    if not key_str:
+        return key_str
+    k = key_str.strip()
+    # If key has literal \\n instead of real newlines, fix it
+    if "\\n" in k and "\n" not in k:
+        k = k.replace("\\n", "\n")
+    # If key somehow lost all newlines, try to reconstruct
+    if "\n" not in k and "-----BEGIN" in k:
+        k = k.replace("-----BEGIN PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----\n")
+        k = k.replace("-----END PRIVATE KEY-----", "\n-----END PRIVATE KEY-----\n")
+    return k
+
+
 @st.cache_resource
 def get_gspread_client():
     """Authenticate with Google using Streamlit secrets.
@@ -109,6 +124,7 @@ def get_gspread_client():
     Supports TWO formats:
     1. Simple: gcp_service_account_json = '{...entire JSON key...}'
     2. Traditional: [gcp_service_account] section with individual fields
+    Auto-fixes common private_key formatting issues.
     """
     try:
         # METHOD 1: Single JSON string (easiest - avoids TOML formatting issues)
@@ -121,6 +137,10 @@ def get_gspread_client():
         else:
             st.error("No Google credentials found in secrets. Add gcp_service_account_json or [gcp_service_account].")
             return None
+        
+        # Auto-fix private key formatting
+        if "private_key" in creds_dict:
+            creds_dict["private_key"] = _fix_private_key(creds_dict["private_key"])
         
         creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
         return gspread.authorize(creds)
@@ -147,7 +167,17 @@ def get_sheet():
         else:
             return client.open("Pilates Flow Studio")
     except Exception as e:
+        # Show diagnostic info to help debug
+        method = "url" if sheet_url else ("id" if sheet_id else "name")
+        value = sheet_url or sheet_id or "Pilates Flow Studio"
         st.error(f"Could not open spreadsheet: {e}")
+        with st.expander("Connection diagnostics"):
+            st.code(f"Method: {method}\nValue: {value}\nClient OK: {client is not None}")
+            if "gcp_service_account" in st.secrets:
+                sa = dict(st.secrets["gcp_service_account"])
+                st.code(f"Service account: {sa.get('client_email', 'MISSING')}")
+                pk = sa.get("private_key", "")
+                st.code(f"Private key starts with: {pk[:30]}...\nPrivate key length: {len(pk)} chars\nHas real newlines: {'\\n' in pk}")
         return None
 
 
@@ -610,4 +640,3 @@ elif st.session_state.view == "history":
                     st.caption("Could not parse workout data.")
                 if row.get("Notes"):
                     st.markdown(f"*Notes: {row['Notes']}*")
-
