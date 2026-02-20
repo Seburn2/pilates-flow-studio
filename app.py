@@ -24,70 +24,192 @@ from pilates_logic import (
 st.set_page_config(
     page_title="Pilates Flow Studio",
     page_icon="🧘",
-    layout="wide",
-    initial_sidebar_state="expanded",
+    layout="centered",
+    initial_sidebar_state="collapsed",
 )
 
 # ─────────────────────────────────────────────
-# Custom Styling
+# Custom Styling — Mobile-First, High Contrast
 # ─────────────────────────────────────────────
 
 st.markdown("""
 <style>
-    /* Main background */
+    /* Main background — clean white/light gray */
     .stApp {
-        background: linear-gradient(135deg, #faf5f0 0%, #f0e6d8 100%);
+        background: linear-gradient(160deg, #f8f9fa 0%, #e9ecef 100%);
     }
 
-    /* Phase headers */
-    .phase-warmup { color: #e8913a; font-weight: 700; font-size: 1.1rem; }
-    .phase-foundation { color: #c0392b; font-weight: 700; font-size: 1.1rem; }
-    .phase-peak { color: #8e44ad; font-weight: 700; font-size: 1.1rem; }
-    .phase-cooldown { color: #2980b9; font-weight: 700; font-size: 1.1rem; }
+    /* ===== NAVIGATION BUTTONS ===== */
+    .nav-container {
+        display: flex;
+        gap: 12px;
+        margin: 0.8rem 0 1.5rem 0;
+    }
+    .nav-btn {
+        flex: 1;
+        padding: 18px 16px;
+        border-radius: 14px;
+        text-align: center;
+        font-size: 1.15rem;
+        font-weight: 700;
+        cursor: pointer;
+        text-decoration: none;
+        border: 3px solid transparent;
+        transition: all 0.2s;
+    }
+    .nav-btn-generate {
+        background: linear-gradient(135deg, #6C63FF 0%, #5A52D5 100%);
+        color: white !important;
+        box-shadow: 0 4px 15px rgba(108,99,255,0.35);
+    }
+    .nav-btn-history {
+        background: linear-gradient(135deg, #00B4D8 0%, #0096B7 100%);
+        color: white !important;
+        box-shadow: 0 4px 15px rgba(0,180,216,0.35);
+    }
+    .nav-btn-active {
+        border: 3px solid #FFD60A;
+        transform: scale(1.02);
+    }
 
-    /* Exercise card */
+    /* ===== PHASE HEADERS ===== */
+    .phase-warmup {
+        color: #FF6B35; font-weight: 800; font-size: 1.2rem;
+        text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .phase-foundation {
+        color: #E63946; font-weight: 800; font-size: 1.2rem;
+        text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .phase-peak {
+        color: #9B5DE5; font-weight: 800; font-size: 1.2rem;
+        text-transform: uppercase; letter-spacing: 0.08em;
+    }
+    .phase-cooldown {
+        color: #00B4D8; font-weight: 800; font-size: 1.2rem;
+        text-transform: uppercase; letter-spacing: 0.08em;
+    }
+
+    /* ===== EXERCISE CARDS ===== */
     .exercise-card {
         background: white;
-        border-radius: 12px;
-        padding: 1.2rem;
+        border-radius: 14px;
+        padding: 1.2rem 1.4rem;
         margin-bottom: 0.8rem;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-        border-left: 4px solid #c0946e;
+        box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        border-left: 5px solid #6C63FF;
     }
-    .exercise-card h4 { margin: 0 0 0.4rem 0; color: #3d2b1f; }
-    .exercise-card .meta { color: #8b7d6b; font-size: 0.85rem; }
-    .exercise-card .cue { color: #5a4e42; font-size: 0.9rem; padding-left: 0.6rem;
-                          border-left: 2px solid #d4c4b0; margin: 0.3rem 0; }
+    .exercise-card h4 {
+        margin: 0 0 0.5rem 0;
+        color: #1a1a2e;
+        font-size: 1.15rem;
+    }
+    .exercise-card .meta {
+        color: #555;
+        font-size: 0.9rem;
+        font-weight: 500;
+    }
+    .exercise-card .cue {
+        color: #333;
+        font-size: 0.95rem;
+        padding: 0.3rem 0 0.3rem 0.8rem;
+        border-left: 3px solid #6C63FF;
+        margin: 0.4rem 0;
+        background: #f8f7ff;
+        border-radius: 0 6px 6px 0;
+    }
 
-    /* Timer display */
+    /* ===== TIMER ===== */
     .timer-display {
-        font-size: 2.5rem;
-        font-weight: 300;
+        font-size: 3rem;
+        font-weight: 700;
         text-align: center;
-        color: #3d2b1f;
-        font-family: 'Courier New', monospace;
-        padding: 0.5rem;
+        color: #1a1a2e;
+        font-family: 'SF Mono', 'Menlo', 'Courier New', monospace;
+        padding: 0.8rem;
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
     }
 
-    /* Sidebar styling */
+    /* ===== SIDEBAR ===== */
     section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #3d2b1f 0%, #5a4232 100%);
+        background: linear-gradient(180deg, #1a1a2e 0%, #2d2d44 100%);
     }
-    section[data-testid="stSidebar"] .stMarkdown { color: #f0e6d8; }
-    section[data-testid="stSidebar"] label { color: #f0e6d8 !important; }
+    section[data-testid="stSidebar"] .stMarkdown { color: #e9ecef; }
+    section[data-testid="stSidebar"] label { color: #e9ecef !important; }
 
-    /* Header */
+    /* ===== HEADER ===== */
     .studio-header {
         text-align: center;
-        padding: 1rem 0 0.5rem 0;
+        padding: 1.2rem 0 0.5rem 0;
     }
     .studio-header h1 {
-        color: #3d2b1f;
-        font-weight: 300;
-        font-size: 2.2rem;
-        letter-spacing: 0.05em;
+        color: #1a1a2e;
+        font-weight: 700;
+        font-size: 2rem;
+        letter-spacing: 0.02em;
+        margin-bottom: 0.2rem;
     }
-    .studio-header p { color: #8b7d6b; font-style: italic; }
+    .studio-header p {
+        color: #666;
+        font-style: italic;
+        font-size: 1rem;
+    }
+
+    /* ===== MOBILE OPTIMIZATIONS ===== */
+    @media (max-width: 768px) {
+        .studio-header h1 { font-size: 1.6rem; }
+        .nav-btn { padding: 16px 12px; font-size: 1.05rem; }
+        .exercise-card { padding: 1rem; }
+        .exercise-card h4 { font-size: 1.1rem; }
+        .timer-display { font-size: 2.5rem; }
+
+        /* Bigger touch targets for all buttons */
+        .stButton > button {
+            min-height: 52px !important;
+            font-size: 1.05rem !important;
+            font-weight: 600 !important;
+            border-radius: 10px !important;
+        }
+
+        /* Make selectboxes and sliders larger */
+        .stSelectbox, .stSlider {
+            font-size: 1rem !important;
+        }
+
+        /* Stack columns on mobile */
+        [data-testid="column"] {
+            min-width: 100% !important;
+        }
+    }
+
+    /* ===== GENERAL BUTTON STYLING ===== */
+    .stButton > button {
+        min-height: 48px;
+        font-weight: 600;
+        border-radius: 10px;
+    }
+
+    /* Primary action buttons */
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(135deg, #6C63FF 0%, #5A52D5 100%) !important;
+        border: none !important;
+        font-size: 1.1rem !important;
+    }
+
+    /* ===== HISTORY TABLE ===== */
+    .stDataFrame {
+        font-size: 0.95rem;
+    }
+
+    /* Make expanders more visible */
+    .streamlit-expanderHeader {
+        font-size: 1.05rem !important;
+        font-weight: 600 !important;
+        background: white !important;
+        border-radius: 10px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -303,18 +425,6 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    nav = st.radio(
-        "Navigate",
-        ["🎲 Generate Workout", "📖 Workout History"],
-        label_visibility="collapsed",
-    )
-
-    if nav == "📖 Workout History":
-        st.session_state.view = "history"
-    elif st.session_state.view == "history":
-        st.session_state.view = "generator"
-
-    st.markdown("---")
     st.caption("Pilates Flow Studio v1.0")
     st.caption(f"Logged in as: **{user}**")
 
@@ -330,22 +440,45 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# ─────────────────────────────────────────────
+# Navigation — Big Bright Buttons
+# ─────────────────────────────────────────────
+
+nav_col1, nav_col2 = st.columns(2)
+with nav_col1:
+    if st.button("🎲  GENERATE WORKOUT", use_container_width=True, type="primary",
+                  key="nav_gen"):
+        st.session_state.view = "generator"
+        st.session_state.workout = None
+        st.rerun()
+with nav_col2:
+    if st.button("📖  WORKOUT HISTORY", use_container_width=True, type="secondary",
+                  key="nav_hist"):
+        st.session_state.view = "history"
+        st.rerun()
+
+# Show which view is active
+if st.session_state.view in ("generator", "player", "finish"):
+    st.markdown('<div style="text-align:center; color:#6C63FF; font-weight:700; font-size:0.9rem; margin-bottom:0.5rem;">● Generate Workout</div>', unsafe_allow_html=True)
+elif st.session_state.view == "history":
+    st.markdown('<div style="text-align:center; color:#00B4D8; font-weight:700; font-size:0.9rem; margin-bottom:0.5rem;">● Workout History</div>', unsafe_allow_html=True)
+
+st.markdown("---")
+
 
 # ─────────────────────────────────────────────
 # View: Generator
 # ─────────────────────────────────────────────
 
 if st.session_state.view == "generator":
-    st.markdown("### Build Your Session")
+    st.markdown("### 💪 Build Your Session")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2 = st.columns(2)
     with col1:
         duration = st.slider("Duration (min)", 30, 90, 50, step=5)
-    with col2:
         apparatus = st.selectbox("Apparatus", APPARATUS_OPTIONS)
-    with col3:
+    with col2:
         theme = st.selectbox("Theme / Focus", THEMES)
-    with col4:
         energy = st.selectbox("Energy Level", list(ENERGY_LEVELS.keys()))
 
     if st.button("🎲 Generate Workout", type="primary", use_container_width=True):
