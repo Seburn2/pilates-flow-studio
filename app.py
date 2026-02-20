@@ -14,7 +14,7 @@ from google.oauth2.service_account import Credentials
 
 from pilates_logic import (
     generate_workout, smart_swap, workout_to_json, json_to_workout,
-    THEMES, APPARATUS_OPTIONS, ENERGY_LEVELS, PHASE_ORDER,
+    THEMES, APPARATUS_OPTIONS, ENERGY_LEVELS, PHASE_ORDER, EXERCISE_DB,
 )
 
 # ─────────────────────────────────────────────
