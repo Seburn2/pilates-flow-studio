@@ -160,10 +160,13 @@ def get_sheet():
     try:
         sheet_url = st.secrets.get("sheet_url", "")
         sheet_id = st.secrets.get("sheet_id", "")
+        sheet_name = st.secrets.get("sheet_name", "")
         if sheet_url:
             return client.open_by_url(sheet_url)
         elif sheet_id:
             return client.open_by_key(sheet_id)
+        elif sheet_name:
+            return client.open(sheet_name)
         else:
             return client.open("Pilates Flow Studio")
     except Exception as e:
