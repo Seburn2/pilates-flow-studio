@@ -525,5 +525,27 @@ def workout_to_json(workout: list[dict]) -> str:
 
 
 def json_to_workout(json_str: str) -> list[dict]:
-    """Deserialize a workout from Google Sheets."""
-    return json.loads(json_str)
+    """Deserialize a workout from Google Sheets.
+    
+    Handles two formats:
+    1. Flat list: [{name, apparatus, ...}, ...]  (app-generated)
+    2. Nested dict: {apparatus, exercises: [...]} (imported)
+    """
+    data = json.loads(json_str)
+    if isinstance(data, list):
+        return data
+    elif isinstance(data, dict) and "exercises" in data:
+        # Imported format — flatten and add apparatus to each exercise
+        apparatus = data.get("apparatus", "Reformer")
+        exercises = data["exercises"]
+        for ex in exercises:
+            if "apparatus" not in ex or not ex["apparatus"]:
+                ex["apparatus"] = apparatus
+            # Ensure required display fields have defaults
+            if "duration_min" not in ex:
+                ex["duration_min"] = 5
+            if "phase_label" not in ex:
+                ex["phase_label"] = ex.get("phase", "foundation").capitalize()
+        return exercises
+    else:
+        return []
