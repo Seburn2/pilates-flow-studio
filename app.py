@@ -210,6 +210,11 @@ st.markdown("""
         background: white !important;
         border-radius: 10px !important;
     }
+
+    /* Chat input styling */
+    .stChatInput {
+        border-radius: 12px !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -401,9 +406,10 @@ DEFAULTS = {
     "timer_running": False,
     "timer_start": None,
     "elapsed": 0,
-    "view": "generator",       # "generator", "player", "history"
+    "view": "generator",       # "generator", "player", "history", "ai_chat"
     "chat_messages": [],
     "workout_rated": False,
+    "ai_messages": [],         # General AI chat history
 }
 for key, val in DEFAULTS.items():
     if key not in st.session_state:
@@ -444,17 +450,22 @@ st.markdown("""
 # Navigation — Big Bright Buttons
 # ─────────────────────────────────────────────
 
-nav_col1, nav_col2 = st.columns(2)
+nav_col1, nav_col2, nav_col3 = st.columns(3)
 with nav_col1:
-    if st.button("🎲  GENERATE WORKOUT", use_container_width=True, type="primary",
+    if st.button("🎲  GENERATE", use_container_width=True, type="primary",
                   key="nav_gen"):
         st.session_state.view = "generator"
         st.session_state.workout = None
         st.rerun()
 with nav_col2:
-    if st.button("📖  WORKOUT HISTORY", use_container_width=True, type="secondary",
+    if st.button("📖  HISTORY", use_container_width=True, type="secondary",
                   key="nav_hist"):
         st.session_state.view = "history"
+        st.rerun()
+with nav_col3:
+    if st.button("🤖  AI COACH", use_container_width=True, type="secondary",
+                  key="nav_ai"):
+        st.session_state.view = "ai_chat"
         st.rerun()
 
 # Show which view is active
@@ -462,6 +473,8 @@ if st.session_state.view in ("generator", "player", "finish"):
     st.markdown('<div style="text-align:center; color:#6C63FF; font-weight:700; font-size:0.9rem; margin-bottom:0.5rem;">● Generate Workout</div>', unsafe_allow_html=True)
 elif st.session_state.view == "history":
     st.markdown('<div style="text-align:center; color:#00B4D8; font-weight:700; font-size:0.9rem; margin-bottom:0.5rem;">● Workout History</div>', unsafe_allow_html=True)
+elif st.session_state.view == "ai_chat":
+    st.markdown('<div style="text-align:center; color:#FF6B35; font-weight:700; font-size:0.9rem; margin-bottom:0.5rem;">● AI Pilates Coach</div>', unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -815,3 +828,134 @@ elif st.session_state.view == "history":
                         st.rerun()
                     except Exception:
                         st.error("Could not load this workout.")
+
+
+# ─────────────────────────────────────────────
+# View: AI Pilates Coach
+# ─────────────────────────────────────────────
+
+elif st.session_state.view == "ai_chat":
+    st.markdown("### 🤖 AI Pilates Coach")
+    st.markdown("*Ask me anything about Pilates — exercises, recommendations, form tips, modifications, and more.*")
+
+    # Quick action buttons
+    st.markdown("**Quick questions:**")
+    qa_col1, qa_col2 = st.columns(2)
+    with qa_col1:
+        if st.button("🔍 Look up an exercise", use_container_width=True, key="qa_lookup"):
+            st.session_state.ai_messages.append({
+                "role": "user",
+                "content": "I'd like to look up a specific Pilates exercise. Ask me which one!"
+            })
+            st.rerun()
+        if st.button("💡 Suggest a workout", use_container_width=True, key="qa_suggest"):
+            st.session_state.ai_messages.append({
+                "role": "user",
+                "content": "Can you recommend a Pilates workout for me? Ask me about my goals and how much time I have."
+            })
+            st.rerun()
+    with qa_col2:
+        if st.button("🩹 Modifications help", use_container_width=True, key="qa_mods"):
+            st.session_state.ai_messages.append({
+                "role": "user",
+                "content": "I need modifications for some exercises. Ask me about my limitations or injuries."
+            })
+            st.rerun()
+        if st.button("📚 Explain springs/setup", use_container_width=True, key="qa_springs"):
+            st.session_state.ai_messages.append({
+                "role": "user",
+                "content": "Can you explain how the spring system works on the Reformer and what the different colors mean?"
+            })
+            st.rerun()
+
+    st.markdown("---")
+
+    # Build exercise knowledge for the AI
+    exercise_names = []
+    exercise_details = []
+    for ex in EXERCISE_DB:
+        exercise_names.append(ex.name)
+        exercise_details.append(
+            f"- {ex.name} ({ex.apparatus}): Category={ex.category}, Phase={ex.phase}, "
+            f"Springs={ex.default_springs}, Energy={ex.energy}/5, "
+            f"Cues: {'; '.join(ex.cues[:2])}"
+        )
+    exercise_knowledge = "\n".join(exercise_details[:40])  # Top 40 to fit context
+
+    # Chat display
+    for msg in st.session_state.ai_messages:
+        if msg["role"] == "user":
+            st.markdown(f'<div style="background:#e8e4ff; padding:12px 16px; border-radius:12px; margin:8px 0; font-size:1rem;"><strong>You:</strong> {msg["content"]}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div style="background:white; padding:12px 16px; border-radius:12px; margin:8px 0; border-left:4px solid #FF6B35; font-size:1rem;"><strong>🤖 Coach:</strong> {msg["content"]}</div>', unsafe_allow_html=True)
+
+    # Chat input
+    user_input = st.chat_input("Ask your Pilates coach anything...")
+
+    if user_input:
+        st.session_state.ai_messages.append({"role": "user", "content": user_input})
+
+        try:
+            import anthropic
+            api_key = st.secrets.get("anthropic_api_key", "")
+            if not api_key:
+                response_text = ("To enable the AI Coach, add your Anthropic API key to Streamlit secrets:\n\n"
+                                 "`anthropic_api_key = \"sk-ant-your-key-here\"`\n\n"
+                                 "Get a key at [console.anthropic.com](https://console.anthropic.com)")
+            else:
+                client = anthropic.Anthropic(api_key=api_key)
+
+                system_prompt = f"""You are a warm, expert Pilates instructor and coach named Coach Flow.
+You have deep knowledge of all Pilates apparatus (Reformer, Mat, Chair/Wunda Chair, Cadillac/Trapeze Table).
+
+YOUR CAPABILITIES:
+1. EXERCISE LOOKUP: When asked about a specific exercise, explain it in detail — setup, springs, 
+   movement, cues, common mistakes, modifications for beginners/injuries, and what muscles it targets.
+2. WORKOUT RECOMMENDATIONS: When asked for workout ideas, ask about their goals, time available,
+   apparatus, energy level, and any limitations. Then suggest a structured session with warmup,
+   foundation, peak, and cooldown phases.
+3. GENERAL PILATES KNOWLEDGE: Answer questions about form, breathing, spring settings, 
+   equipment setup, anatomy, modifications for injuries/conditions (back pain, knee issues, 
+   pregnancy, osteoporosis, etc.), and Pilates philosophy.
+
+EXERCISES IN OUR STUDIO DATABASE:
+{exercise_knowledge}
+
+STYLE:
+- Be warm, encouraging, and professional
+- Use clear, concise language
+- When describing exercises, use vivid cues like a real instructor would
+- For modifications, always prioritize safety
+- Use bullet points for exercise breakdowns
+- If recommending a workout, format it clearly with phases
+- Keep responses focused — 3-6 sentences for simple questions, longer for workout plans
+
+The user's name is {user}."""
+
+                # Build message history for context
+                api_messages = []
+                for msg in st.session_state.ai_messages:
+                    api_messages.append({"role": msg["role"], "content": msg["content"]})
+
+                response = client.messages.create(
+                    model="claude-sonnet-4-5-20250929",
+                    max_tokens=800,
+                    system=system_prompt,
+                    messages=api_messages,
+                )
+                response_text = response.content[0].text
+
+        except ImportError:
+            response_text = "Install the `anthropic` package to enable AI chat."
+        except Exception as e:
+            response_text = f"Sorry, I couldn't process that: {e}"
+
+        st.session_state.ai_messages.append({"role": "assistant", "content": response_text})
+        st.rerun()
+
+    # Clear chat button
+    if st.session_state.ai_messages:
+        st.markdown("---")
+        if st.button("🗑️ Clear conversation", key="clear_ai"):
+            st.session_state.ai_messages = []
+            st.rerun()
