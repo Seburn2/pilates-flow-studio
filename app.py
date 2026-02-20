@@ -540,12 +540,162 @@ if st.session_state.view == "generator":
                     st.caption(ex.get("category", ex.get("reps", "")))
                 with c3:
                     if st.button("🔄", key=f"swap_{i}", help="Swap this exercise"):
-                        new_ex = smart_swap(workout, i)
-                        if new_ex:
-                            st.session_state.workout[i] = new_ex
-                            st.rerun()
-                        else:
-                            st.toast("No alternative found for this slot.")
+                        st.session_state[f"swap_open_{i}"] = not st.session_state.get(f"swap_open_{i}", False)
+                        st.rerun()
+
+                # Expandable swap panel
+                if st.session_state.get(f"swap_open_{i}", False):
+                    with st.container():
+                        st.markdown(f'<div style="background:#f0eeff; padding:12px; border-radius:10px; margin-bottom:12px;">', unsafe_allow_html=True)
+                        st.markdown(f"**Replace: {ex.get('name', 'Exercise')}** ({ex.get('phase_label', ex.get('phase', ''))})")
+
+                        swap_tab1, swap_tab2, swap_tab3 = st.tabs(["🎲 Random Swap", "🔍 Browse & Search", "🤖 AI Suggest"])
+
+                        with swap_tab1:
+                            st.caption("Find a similar exercise in the same phase & category")
+                            if st.button("Swap randomly", key=f"rand_swap_{i}", use_container_width=True):
+                                new_ex = smart_swap(workout, i)
+                                if new_ex:
+                                    st.session_state.workout[i] = new_ex
+                                    st.session_state[f"swap_open_{i}"] = False
+                                    st.rerun()
+                                else:
+                                    st.warning("No alternatives found in this category.")
+
+                        with swap_tab2:
+                            # Filter exercises by phase (or show all)
+                            current_phase = ex.get("phase_label", ex.get("phase", "")).lower()
+                            current_apparatus = ex.get("apparatus", "")
+
+                            filter_col1, filter_col2 = st.columns(2)
+                            with filter_col1:
+                                phase_filter = st.selectbox(
+                                    "Phase", ["All", "Warmup", "Foundation", "Peak", "Cooldown"],
+                                    index=["all", "warmup", "foundation", "peak", "cooldown"].index(current_phase) + 1 if current_phase in ["warmup", "foundation", "peak", "cooldown"] else 0,
+                                    key=f"phase_filter_{i}"
+                                )
+                            with filter_col2:
+                                app_filter = st.selectbox(
+                                    "Apparatus", ["All"] + APPARATUS_OPTIONS,
+                                    index=(APPARATUS_OPTIONS.index(current_apparatus) + 1) if current_apparatus in APPARATUS_OPTIONS else 0,
+                                    key=f"app_filter_{i}"
+                                )
+
+                            # Search box
+                            search_text = st.text_input("Search by name or category", key=f"search_{i}",
+                                                        placeholder="e.g. arm, footwork, spine, hip...")
+
+                            # Build filtered list
+                            used_slugs = {e.get("slug", "") for e in workout}
+                            filtered = []
+                            for db_ex in EXERCISE_DB:
+                                if db_ex.slug in used_slugs:
+                                    continue
+                                if phase_filter != "All" and db_ex.phase != phase_filter.lower():
+                                    continue
+                                if app_filter != "All" and db_ex.apparatus != app_filter:
+                                    continue
+                                if search_text:
+                                    search_lower = search_text.lower()
+                                    if (search_lower not in db_ex.name.lower()
+                                        and search_lower not in db_ex.category.lower()
+                                        and not any(search_lower in t.lower() for t in db_ex.themes)):
+                                        continue
+                                filtered.append(db_ex)
+
+                            if filtered:
+                                exercise_options = {f"{e.name} ({e.apparatus} · {e.category})": e for e in filtered}
+                                selected = st.selectbox(
+                                    f"{len(filtered)} exercises available",
+                                    options=list(exercise_options.keys()),
+                                    key=f"browse_{i}"
+                                )
+                                if selected:
+                                    preview = exercise_options[selected]
+                                    st.caption(f"Springs: {preview.default_springs} · Energy: {preview.energy}/5 · Phase: {preview.phase}")
+                                    if preview.cues:
+                                        st.caption(f"Cues: {preview.cues[0]}")
+                                    if st.button("✅ Use this exercise", key=f"use_{i}", use_container_width=True, type="primary"):
+                                        entry = preview.to_dict()
+                                        entry["phase_label"] = ex.get("phase_label", ex.get("phase", preview.phase)).capitalize()
+                                        st.session_state.workout[i] = entry
+                                        st.session_state[f"swap_open_{i}"] = False
+                                        st.rerun()
+                            else:
+                                st.info("No matching exercises. Try broadening your filters.")
+
+                        with swap_tab3:
+                            st.caption("Describe what you want and AI will find it from the exercise database")
+                            ai_request = st.text_input(
+                                "What are you looking for?", key=f"ai_swap_{i}",
+                                placeholder="e.g. arm warmups, hip opener, something easier, core challenge..."
+                            )
+                            if ai_request and st.button("Get AI suggestion", key=f"ai_go_{i}", use_container_width=True):
+                                try:
+                                    import anthropic
+                                    api_key = st.secrets.get("anthropic_api_key", "")
+                                    if not api_key:
+                                        st.warning("Add your anthropic_api_key to Streamlit secrets to use AI suggestions.")
+                                    else:
+                                        # Build exercise list for AI
+                                        available = [e for e in EXERCISE_DB if e.slug not in used_slugs]
+                                        ex_list = "\n".join(
+                                            f"- SLUG:{e.slug} | {e.name} ({e.apparatus}) | {e.category} | Phase:{e.phase} | Springs:{e.default_springs} | Energy:{e.energy}/5"
+                                            for e in available
+                                        )
+                                        client = anthropic.Anthropic(api_key=api_key)
+                                        response = client.messages.create(
+                                            model="claude-sonnet-4-5-20250929",
+                                            max_tokens=200,
+                                            system=f"""You are a Pilates exercise selector. The user wants to replace an exercise in their workout.
+Current exercise: {ex.get('name', 'Unknown')} (Phase: {ex.get('phase_label', ex.get('phase', ''))}, Category: {ex.get('category', '')})
+
+ONLY suggest exercises from this list. Return EXACTLY the SLUG of your top pick, then a brief reason.
+Format: SLUG:the_slug_here
+REASON:why this is a good fit
+
+Available exercises:
+{ex_list}""",
+                                            messages=[{"role": "user", "content": ai_request}],
+                                        )
+                                        ai_text = response.content[0].text
+
+                                        # Parse the slug from AI response
+                                        suggested_slug = None
+                                        for line in ai_text.split("\n"):
+                                            if line.strip().startswith("SLUG:"):
+                                                suggested_slug = line.strip().replace("SLUG:", "").strip()
+                                                break
+
+                                        # Find the exercise
+                                        suggested_ex = None
+                                        if suggested_slug:
+                                            for db_ex in EXERCISE_DB:
+                                                if db_ex.slug == suggested_slug:
+                                                    suggested_ex = db_ex
+                                                    break
+
+                                        if suggested_ex:
+                                            reason = ""
+                                            for line in ai_text.split("\n"):
+                                                if line.strip().startswith("REASON:"):
+                                                    reason = line.strip().replace("REASON:", "").strip()
+                                            st.success(f"**Suggestion: {suggested_ex.name}** ({suggested_ex.apparatus})")
+                                            if reason:
+                                                st.caption(reason)
+                                            st.caption(f"Springs: {suggested_ex.default_springs} · Energy: {suggested_ex.energy}/5")
+                                            if st.button("✅ Use this", key=f"ai_use_{i}", use_container_width=True, type="primary"):
+                                                entry = suggested_ex.to_dict()
+                                                entry["phase_label"] = ex.get("phase_label", ex.get("phase", suggested_ex.phase)).capitalize()
+                                                st.session_state.workout[i] = entry
+                                                st.session_state[f"swap_open_{i}"] = False
+                                                st.rerun()
+                                        else:
+                                            st.info(ai_text)
+                                except Exception as e:
+                                    st.error(f"AI error: {e}")
+
+                        st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown("---")
         col_start, col_save = st.columns(2)
@@ -880,7 +1030,7 @@ elif st.session_state.view == "ai_chat":
             f"Springs={ex.default_springs}, Energy={ex.energy}/5, "
             f"Cues: {'; '.join(ex.cues[:2])}"
         )
-    exercise_knowledge = "\n".join(exercise_details[:40])  # Top 40 to fit context
+    exercise_knowledge = "\n".join(exercise_details)  # Include all exercises
 
     # Chat display
     for msg in st.session_state.ai_messages:
@@ -908,18 +1058,26 @@ elif st.session_state.view == "ai_chat":
                 system_prompt = f"""You are a warm, expert Pilates instructor and coach named Coach Flow.
 You have deep knowledge of all Pilates apparatus (Reformer, Mat, Chair/Wunda Chair, Cadillac/Trapeze Table).
 
+CRITICAL RULE: When recommending or discussing specific exercises, you must ONLY reference exercises 
+from the studio database listed below. NEVER invent or make up exercise names. If someone asks about 
+an exercise not in the database, you can explain it generally but be clear it's not in our current studio library.
+
 YOUR CAPABILITIES:
 1. EXERCISE LOOKUP: When asked about a specific exercise, explain it in detail — setup, springs, 
    movement, cues, common mistakes, modifications for beginners/injuries, and what muscles it targets.
-2. WORKOUT RECOMMENDATIONS: When asked for workout ideas, ask about their goals, time available,
-   apparatus, energy level, and any limitations. Then suggest a structured session with warmup,
-   foundation, peak, and cooldown phases.
+   Always check if it exists in our database first.
+2. WORKOUT RECOMMENDATIONS: When asked for workout ideas, ONLY use exercises from the database below.
+   Ask about their goals, time available, apparatus, energy level, and any limitations. Then suggest 
+   a structured session using the bell curve: Warmup → Foundation → Peak → Cooldown.
 3. GENERAL PILATES KNOWLEDGE: Answer questions about form, breathing, spring settings, 
    equipment setup, anatomy, modifications for injuries/conditions (back pain, knee issues, 
    pregnancy, osteoporosis, etc.), and Pilates philosophy.
 
-EXERCISES IN OUR STUDIO DATABASE:
+OUR COMPLETE STUDIO EXERCISE DATABASE ({len(EXERCISE_DB)} exercises):
 {exercise_knowledge}
+
+When recommending workouts, use the exact exercise names from this list.
+When someone asks "what exercises do you have for X", search this list and cite the matches.
 
 STYLE:
 - Be warm, encouraging, and professional
