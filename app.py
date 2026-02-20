@@ -360,13 +360,13 @@ if st.session_state.view == "generator":
     # Display generated workout
     if st.session_state.workout:
         workout = st.session_state.workout
-        total_time = sum(e["duration_min"] for e in workout)
+        total_time = sum(e.get("duration_min", 5) for e in workout)
         st.markdown(f"**{len(workout)} exercises** · ~**{total_time:.0f} min** total")
 
         # Group by phase
         current_phase = None
         for i, ex in enumerate(workout):
-            phase = ex["phase_label"]
+            phase = ex.get("phase_label", ex.get("phase", "Foundation")).capitalize()
             if phase != current_phase:
                 current_phase = phase
                 css_class = f"phase-{phase.lower()}"
@@ -376,17 +376,27 @@ if st.session_state.view == "generator":
             with st.container():
                 c1, c2, c3 = st.columns([6, 2, 1])
                 with c1:
-                    springs = f" · {ex['default_springs']}" if ex['default_springs'] != 'N/A' else ""
+                    springs_val = ex.get('default_springs', ex.get('springs', ''))
+                    springs = f" · {springs_val}" if springs_val and springs_val != 'N/A' else ""
+                    apparatus = ex.get('apparatus', '')
+                    duration = ex.get('duration_min', 5)
+                    energy = ex.get('energy', '')
+                    cues = ex.get('cues', [])
+                    if isinstance(cues, list) and cues:
+                        cue_html = '</div><div class="cue">'.join(str(c) for c in cues[:2] if c)
+                    else:
+                        cue_html = ""
+                    energy_str = f" · Energy {energy}/5" if energy else ""
                     st.markdown(
                         f"""<div class="exercise-card">
-                        <h4>{i+1}. {ex['name']}</h4>
-                        <div class="meta">{ex['apparatus']}{springs} · {ex['duration_min']} min · Energy {ex['energy']}/5</div>
-                        <div class="cue">{'</div><div class="cue">'.join(ex['cues'][:2])}</div>
+                        <h4>{i+1}. {ex.get('name', 'Exercise')}</h4>
+                        <div class="meta">{apparatus}{springs} · {duration} min{energy_str}</div>
+                        {"<div class='cue'>" + cue_html + "</div>" if cue_html else ""}
                         </div>""",
                         unsafe_allow_html=True,
                     )
                 with c2:
-                    st.caption(ex["category"])
+                    st.caption(ex.get("category", ex.get("reps", "")))
                 with c3:
                     if st.button("🔄", key=f"swap_{i}", help="Swap this exercise"):
                         new_ex = smart_swap(workout, i)
@@ -454,25 +464,29 @@ elif st.session_state.view == "player" and st.session_state.workout:
 
     with main_col:
         # Phase indicator
-        css_class = f"phase-{ex['phase_label'].lower()}"
-        st.markdown(f'<span class="{css_class}">{ex["phase_label"].upper()}</span>',
+        phase = ex.get('phase_label', ex.get('phase', 'Foundation')).capitalize()
+        css_class = f"phase-{phase.lower()}"
+        st.markdown(f'<span class="{css_class}">{phase.upper()}</span>',
                     unsafe_allow_html=True)
 
         # Exercise title and info
-        st.markdown(f"## {ex['name']}")
+        st.markdown(f"## {ex.get('name', 'Exercise')}")
 
         info_cols = st.columns(3)
         with info_cols[0]:
-            st.metric("Apparatus", ex["apparatus"])
+            st.metric("Apparatus", ex.get("apparatus", "Reformer"))
         with info_cols[1]:
-            st.metric("Springs", ex["default_springs"])
+            st.metric("Springs", ex.get("default_springs", ex.get("springs", "—")))
         with info_cols[2]:
-            st.metric("Duration", f"{ex['duration_min']} min")
+            st.metric("Duration", f"{ex.get('duration_min', 5)} min")
 
         # Cues
-        st.markdown("#### Teaching Cues")
-        for cue in ex["cues"]:
-            st.markdown(f'<div class="cue">▸ {cue}</div>', unsafe_allow_html=True)
+        cues = ex.get("cues", [])
+        if cues and any(c for c in cues if c):
+            st.markdown("#### Teaching Cues")
+            for cue in cues:
+                if cue:
+                    st.markdown(f'<div class="cue">▸ {cue}</div>', unsafe_allow_html=True)
 
         # Timer
         st.markdown("---")
@@ -563,7 +577,7 @@ elif st.session_state.view == "finish" and st.session_state.workout:
     st.balloons()
 
     workout = st.session_state.workout
-    total_time = sum(e["duration_min"] for e in workout)
+    total_time = sum(e.get("duration_min", 5) for e in workout)
     st.markdown(f"You completed **{len(workout)} exercises** (~{total_time:.0f} min). Amazing work!")
 
     if not st.session_state.workout_rated:
@@ -631,15 +645,45 @@ elif st.session_state.view == "history":
         # Expandable detail view
         st.markdown("#### Session Details")
         for i, row in df.iterrows():
-            with st.expander(f"📋 {row['Date']} — {row['Theme']} ({row['Duration']} min)"):
-                try:
-                    exercises = json_to_workout(row["Full_JSON_Data"])
-                    for j, ex in enumerate(exercises):
-                        st.markdown(
-                            f"**{j+1}. {ex['name']}** ({ex['apparatus']}) — "
-                            f"{ex.get('phase_label', '')} · {ex['duration_min']} min"
-                        )
-                except (json.JSONDecodeError, KeyError):
-                    st.caption("Could not parse workout data.")
-                if row.get("Notes"):
-                    st.markdown(f"*Notes: {row['Notes']}*")
+            col_exp, col_btn = st.columns([5, 1])
+            with col_exp:
+                with st.expander(f"📋 {row['Date']} — {row['Theme']} ({row['Duration']} min)"):
+                    try:
+                        exercises = json_to_workout(row["Full_JSON_Data"])
+                        for j, ex in enumerate(exercises):
+                            name = ex.get('name', 'Unknown')
+                            apparatus = ex.get('apparatus', '')
+                            phase = ex.get('phase_label', ex.get('phase', ''))
+                            duration = ex.get('duration_min', '')
+                            springs = ex.get('springs', '')
+                            reps = ex.get('reps', '')
+
+                            # Build display line
+                            parts = [f"**{j+1}. {name}**"]
+                            if apparatus:
+                                parts[0] += f" ({apparatus})"
+                            details = []
+                            if phase:
+                                details.append(phase)
+                            if duration:
+                                details.append(f"{duration} min")
+                            if springs:
+                                details.append(f"Springs: {springs}")
+                            if reps:
+                                details.append(f"{reps}")
+                            if details:
+                                parts.append(" · ".join(details))
+                            st.markdown(" — ".join(parts))
+                    except Exception:
+                        st.caption("Could not parse workout data.")
+                    if row.get("Notes"):
+                        st.markdown(f"*Notes: {row['Notes']}*")
+            with col_btn:
+                if st.button("🔁", key=f"repeat_{i}", help="Load this workout"):
+                    try:
+                        exercises = json_to_workout(row["Full_JSON_Data"])
+                        st.session_state.workout = exercises
+                        st.session_state.view = "player"
+                        st.rerun()
+                    except Exception:
+                        st.error("Could not load this workout.")
