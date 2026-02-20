@@ -383,18 +383,13 @@ if st.session_state.view == "generator":
                     energy = ex.get('energy', '')
                     cues = ex.get('cues', [])
                     if isinstance(cues, list) and cues:
-                        cue_html = '</div><div class="cue">'.join(str(c) for c in cues[:2] if c)
+                        filtered_cues = [str(c) for c in cues[:2] if c and str(c).strip()]
                     else:
-                        cue_html = ""
+                        filtered_cues = []
                     energy_str = f" · Energy {energy}/5" if energy else ""
-                    st.markdown(
-                        f"""<div class="exercise-card">
-                        <h4>{i+1}. {ex.get('name', 'Exercise')}</h4>
-                        <div class="meta">{apparatus}{springs} · {duration} min{energy_str}</div>
-                        {"<div class='cue'>" + cue_html + "</div>" if cue_html else ""}
-                        </div>""",
-                        unsafe_allow_html=True,
-                    )
+                    cue_lines = "".join(f'<div class="cue">▸ {c}</div>' for c in filtered_cues)
+                    card_html = f'<div class="exercise-card"><h4>{i+1}. {ex.get("name", "Exercise")}</h4><div class="meta">{apparatus}{springs} · {duration} min{energy_str}</div>{cue_lines}</div>'
+                    st.markdown(card_html, unsafe_allow_html=True)
                 with c2:
                     st.caption(ex.get("category", ex.get("reps", "")))
                 with c3:
