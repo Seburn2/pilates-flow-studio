@@ -434,6 +434,28 @@ def generate_workout_pdf(workout: list[dict], user: str, theme: str = "",
     """Generate a clean PDF of a workout plan."""
     from fpdf import FPDF
 
+    def safe_text(text):
+        """Sanitize text for fpdf2 latin-1 compatibility."""
+        if not isinstance(text, str):
+            text = str(text)
+        replacements = {
+            "\u2013": "-", "\u2014": "-", "\u2015": "-",   # en-dash, em-dash
+            "\u2018": "'", "\u2019": "'",                   # smart single quotes
+            "\u201c": '"', "\u201d": '"',                   # smart double quotes
+            "\u2026": "...",                                 # ellipsis
+            "\u2022": "*",                                   # bullet
+            "\u00b7": "*",                                   # middle dot
+            "\u2192": "->", "\u2190": "<-",                 # arrows
+            "\u2248": "~",                                   # approximately
+            "\u00b0": " deg",                                # degree
+            "\u2212": "-",                                   # minus sign
+        }
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        # Strip any remaining non-latin-1 characters
+        text = text.encode("latin-1", errors="replace").decode("latin-1")
+        return text
+
     class WorkoutPDF(FPDF):
         def header(self):
             self.set_font("Helvetica", "B", 18)
@@ -455,11 +477,11 @@ def generate_workout_pdf(workout: list[dict], user: str, theme: str = "",
 
     # Workout metadata
     pdf.set_font("Helvetica", "B", 13)
-    pdf.cell(0, 8, f"Workout Plan for {user}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 8, safe_text(f"Workout Plan for {user}"), new_x="LMARGIN", new_y="NEXT")
     pdf.set_font("Helvetica", "", 10)
-    pdf.cell(0, 6, f"Date: {date.today().strftime('%B %d, %Y')}", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 6, safe_text(f"Date: {date.today().strftime('%B %d, %Y')}"), new_x="LMARGIN", new_y="NEXT")
     if apparatus:
-        pdf.cell(0, 6, f"Apparatus: {apparatus}  |  Theme: {theme}  |  Duration: {duration} min", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 6, safe_text(f"Apparatus: {apparatus}  |  Theme: {theme}  |  Duration: {duration} min"), new_x="LMARGIN", new_y="NEXT")
     pdf.ln(4)
 
     # Exercises grouped by phase
@@ -478,7 +500,7 @@ def generate_workout_pdf(workout: list[dict], user: str, theme: str = "",
             pdf.set_fill_color(r, g, b)
             pdf.set_text_color(255, 255, 255)
             pdf.set_font("Helvetica", "B", 11)
-            pdf.cell(0, 8, f"  {phase.upper()}", fill=True, new_x="LMARGIN", new_y="NEXT")
+            pdf.cell(0, 8, safe_text(f"  {phase.upper()}"), fill=True, new_x="LMARGIN", new_y="NEXT")
             pdf.set_text_color(0, 0, 0)
             pdf.ln(2)
 
@@ -489,7 +511,7 @@ def generate_workout_pdf(workout: list[dict], user: str, theme: str = "",
         cues = ex.get("cues", [])
 
         pdf.set_font("Helvetica", "B", 10)
-        pdf.cell(0, 6, f"{i+1}. {name}", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 6, safe_text(f"{i+1}. {name}"), new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("Helvetica", "", 9)
         meta_parts = []
         if springs and springs != "N/A":
@@ -499,7 +521,7 @@ def generate_workout_pdf(workout: list[dict], user: str, theme: str = "",
         if category:
             meta_parts.append(category)
         pdf.set_text_color(100, 100, 100)
-        pdf.cell(0, 5, "    " + "  |  ".join(meta_parts), new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(0, 5, safe_text("    " + "  |  ".join(meta_parts)), new_x="LMARGIN", new_y="NEXT")
 
         # Cues
         if isinstance(cues, list):
@@ -507,7 +529,7 @@ def generate_workout_pdf(workout: list[dict], user: str, theme: str = "",
                 if cue and str(cue).strip():
                     pdf.set_text_color(80, 80, 80)
                     pdf.set_font("Helvetica", "I", 9)
-                    pdf.cell(0, 5, f"       {cue}", new_x="LMARGIN", new_y="NEXT")
+                    pdf.cell(0, 5, safe_text(f"       {cue}"), new_x="LMARGIN", new_y="NEXT")
         pdf.set_text_color(0, 0, 0)
         pdf.ln(1)
 
@@ -1155,19 +1177,23 @@ Available exercises:
         # Row 2: Share & Favorite
         col_pdf, col_fav = st.columns(2)
         with col_pdf:
-            pdf_bytes = generate_workout_pdf(
-                workout, user,
-                theme=w_theme,
-                duration=meta.get("duration", 0),
-                apparatus=meta.get("apparatus", ""),
-            )
-            st.download_button(
-                "📄 SHARE / EXPORT PDF",
-                data=pdf_bytes,
-                file_name=f"pilates_workout_{date.today().isoformat()}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
+            try:
+                pdf_bytes = generate_workout_pdf(
+                    workout, user,
+                    theme=w_theme,
+                    duration=meta.get("duration", 0),
+                    apparatus=meta.get("apparatus", ""),
+                )
+                st.download_button(
+                    "📄 SHARE / EXPORT PDF",
+                    data=pdf_bytes,
+                    file_name=f"pilates_workout_{date.today().isoformat()}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as pdf_err:
+                st.button("📄 PDF unavailable", disabled=True, use_container_width=True,
+                           help=f"PDF error: {pdf_err}")
         with col_fav:
             if st.button("⭐ Save as Favorite", use_container_width=True, key="fav_gen"):
                 fav_data = {
@@ -1368,19 +1394,23 @@ elif st.session_state.view == "finish" and st.session_state.workout:
     fin_col1, fin_col2 = st.columns(2)
     meta = st.session_state.get("workout_meta", {})
     with fin_col1:
-        pdf_bytes = generate_workout_pdf(
-            workout, user,
-            theme=meta.get("theme", ""),
-            duration=int(total_time),
-            apparatus=meta.get("apparatus", ""),
-        )
-        st.download_button(
-            "📄 SHARE / EXPORT PDF",
-            data=pdf_bytes,
-            file_name=f"pilates_workout_{date.today().isoformat()}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
-        )
+        try:
+            pdf_bytes = generate_workout_pdf(
+                workout, user,
+                theme=meta.get("theme", ""),
+                duration=int(total_time),
+                apparatus=meta.get("apparatus", ""),
+            )
+            st.download_button(
+                "📄 SHARE / EXPORT PDF",
+                data=pdf_bytes,
+                file_name=f"pilates_workout_{date.today().isoformat()}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except Exception as pdf_err:
+            st.button("📄 PDF unavailable", disabled=True, use_container_width=True,
+                       help=f"PDF error: {pdf_err}")
     with fin_col2:
         if st.button("⭐ Save as Favorite", use_container_width=True, key="fav_finish"):
             fav_data = {
