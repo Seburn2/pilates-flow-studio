@@ -1583,39 +1583,54 @@ elif st.session_state.view == "player" and st.session_state.workout:
         video_url = ex.get("video_url", "")
         if video_url:
             st.markdown(f'<a href="{video_url}" target="_blank" style="display:inline-block; '
-                        f'padding:8px 16px; background:#FF0000; color:white; border-radius:8px; '
-                        f'text-decoration:none; font-weight:600; font-size:0.9rem; margin-top:8px;">'
+                        f'padding:10px 18px; background:#FF0000; color:white !important; border-radius:8px; '
+                        f'text-decoration:none; font-weight:600; font-size:0.95rem; margin-top:10px;">'
                         f'▶ Watch Tutorial on YouTube</a>', unsafe_allow_html=True)
+        else:
+            # Auto-generate a YouTube search link for this exercise
+            import urllib.parse
+            search_q = urllib.parse.quote(f"pilates {ex.get('name', '')} {ex.get('apparatus', '')} tutorial")
+            st.markdown(f'<a href="https://www.youtube.com/results?search_query={search_q}" target="_blank" '
+                        f'style="display:inline-block; padding:10px 18px; background:#333; color:white !important; '
+                        f'border-radius:8px; text-decoration:none; font-weight:600; font-size:0.95rem; '
+                        f'margin-top:10px;">🔍 Find Tutorial on YouTube</a>', unsafe_allow_html=True)
 
     # Chat column
     with chat_col:
         st.markdown("#### 💬 Ask Instructor")
         st.caption(f"Context: *{ex['name']}*")
 
-        # ─── Spotify Embed (ambient music) ───
-        with st.expander("🎵 Workout Music", expanded=False):
-            spotify_url = st.text_input(
-                "Paste a Spotify playlist URL",
-                value=st.session_state.get("spotify_url", ""),
-                placeholder="https://open.spotify.com/playlist/...",
-                key="spotify_input",
-                label_visibility="collapsed",
+        # ─── Spotify Music Player ───
+        st.markdown(
+            '<div style="background:linear-gradient(135deg,#1DB954 0%,#191414 100%); '
+            'padding:12px 16px; border-radius:12px; margin-bottom:12px;">'
+            '<span style="color:white; font-weight:700; font-size:0.95rem;">🎵 Workout Music</span>'
+            '</div>', unsafe_allow_html=True
+        )
+        spotify_url = st.text_input(
+            "Spotify URL",
+            value=st.session_state.get("spotify_url", ""),
+            placeholder="Paste a Spotify playlist link here...",
+            key="spotify_input",
+            label_visibility="collapsed",
+        )
+        if spotify_url and "spotify.com" in spotify_url:
+            st.session_state["spotify_url"] = spotify_url
+            # Convert URL to embed URL
+            embed_url = spotify_url.replace("open.spotify.com/", "open.spotify.com/embed/")
+            if "?" not in embed_url:
+                embed_url += "?utm_source=generator&theme=0"
+            st.components.v1.html(
+                f'<iframe style="border-radius:12px" src="{embed_url}" '
+                f'width="100%" height="152" frameBorder="0" allowfullscreen="" '
+                f'allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" '
+                f'loading="lazy"></iframe>',
+                height=165,
             )
-            if spotify_url and "spotify.com" in spotify_url:
-                st.session_state["spotify_url"] = spotify_url
-                # Convert URL to embed URL
-                embed_url = spotify_url.replace("open.spotify.com/", "open.spotify.com/embed/")
-                if "?" not in embed_url:
-                    embed_url += "?utm_source=generator&theme=0"
-                st.components.v1.html(
-                    f'<iframe style="border-radius:12px" src="{embed_url}" '
-                    f'width="100%" height="152" frameBorder="0" allowfullscreen="" '
-                    f'allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" '
-                    f'loading="lazy"></iframe>',
-                    height=165,
-                )
-            else:
-                st.caption("Paste any Spotify playlist link to play music during your workout.")
+        else:
+            st.caption("Paste any Spotify playlist or album link above to play music during your session.")
+
+        st.markdown("---")
 
         # Display chat history
         for msg in st.session_state.chat_messages:
