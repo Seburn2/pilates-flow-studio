@@ -20,12 +20,6 @@ from pilates_logic import (
     THEMES, APPARATUS_OPTIONS, ENERGY_LEVELS, PHASE_ORDER, EXERCISE_DB,
 )
 
-try:
-    from streamlit_autorefresh import st_autorefresh
-    HAS_AUTOREFRESH = True
-except ImportError:
-    HAS_AUTOREFRESH = False
-
 # ─────────────────────────────────────────────
 # Page Config
 # ─────────────────────────────────────────────
@@ -880,6 +874,7 @@ DEFAULTS = {
     "chat_messages": [],
     "workout_rated": False,
     "ai_messages": [],         # General AI chat history
+    "ai_pending": False,       # Flag: quick button pressed, needs AI response
     "workout_meta": {},        # Store theme/apparatus/duration for current workout
     "favorites": [],           # List of favorite workout JSON strings
 }
@@ -1340,51 +1335,97 @@ elif st.session_state.view == "player" and st.session_state.workout:
                 st.session_state.view = "finish"
                 st.rerun()
 
-    # ─── Session Timer (always visible at top) ───
-    timer_start_val = st.session_state.get("timer_start", None)
-    if st.session_state.timer_running and timer_start_val is not None:
-        elapsed_t = st.session_state.elapsed + (
-            time_module.time() - timer_start_val
-        )
-        # Auto-refresh every second while running
-        if HAS_AUTOREFRESH:
-            st_autorefresh(interval=1000, limit=None, key="timer_tick")
-    else:
-        elapsed_t = st.session_state.elapsed
+    # ─── Session Timer (pure JavaScript — survives Streamlit reruns) ───
+    est_total = sum(e.get("duration_min", 5) for e in workout)
+    st.components.v1.html(f"""
+    <div id="timer-wrap" style="display:flex; align-items:center; gap:12px; padding:8px 0;">
+        <div id="timer-display" style="font-family:'SF Mono',monospace; font-size:2.2rem;
+             font-weight:800; color:#1a1a2e; background:#f0f0f0; padding:8px 20px;
+             border-radius:12px; min-width:180px; text-align:center;">00:00:00</div>
+        <button id="btn-start" onclick="toggleTimer()" style="padding:10px 20px;
+             font-size:1rem; font-weight:700; border:none; border-radius:10px;
+             background:#6C63FF; color:white; cursor:pointer; min-width:80px;">▶ Start</button>
+        <button onclick="resetTimer()" style="padding:10px 20px; font-size:1rem;
+             font-weight:600; border:2px solid #ddd; border-radius:10px; background:white;
+             cursor:pointer;">↺ Reset</button>
+        <span style="color:#888; font-size:0.85rem;">Est. {est_total}min</span>
+    </div>
+    <script>
+        // Use parent window sessionStorage so timer survives iframe recreation
+        const storage = window.parent.sessionStorage;
+        const KEY_START = 'pfs_timer_start';
+        const KEY_RUNNING = 'pfs_timer_running';
+        const KEY_ELAPSED = 'pfs_timer_elapsed';
 
-    mins_t, secs_t = divmod(int(elapsed_t), 60)
-    hrs_t, mins_t = divmod(mins_t, 60)
+        const display = document.getElementById('timer-display');
+        const btn = document.getElementById('btn-start');
+        let interval = null;
 
-    timer_c1, timer_c2, timer_c3, timer_c4 = st.columns([3, 1, 1, 1])
-    with timer_c1:
-        st.markdown(
-            f'<div class="timer-display">{hrs_t:02d}:{mins_t:02d}:{secs_t:02d}</div>',
-            unsafe_allow_html=True,
-        )
-    with timer_c2:
-        if not st.session_state.timer_running:
-            if st.button("▶ Start", use_container_width=True, key="btn_timer_start"):
-                st.session_state.timer_running = True
-                st.session_state.timer_start = time_module.time()
-                st.rerun()
-        else:
-            if st.button("⏸ Pause", use_container_width=True, key="btn_timer_pause"):
-                if timer_start_val is not None:
-                    st.session_state.elapsed += (
-                        time_module.time() - timer_start_val
-                    )
-                st.session_state.timer_running = False
-                st.session_state.timer_start = None
-                st.rerun()
-    with timer_c3:
-        if st.button("↺ Reset", use_container_width=True, key="btn_timer_reset"):
-            st.session_state.elapsed = 0
-            st.session_state.timer_running = False
-            st.session_state.timer_start = None
-            st.rerun()
-    with timer_c4:
-        est_total = sum(e.get("duration_min", 5) for e in workout)
-        st.caption(f"Est. {est_total}min")
+        function pad(n) {{ return n.toString().padStart(2, '0'); }}
+
+        function formatTime(totalSec) {{
+            const h = Math.floor(totalSec / 3600);
+            const m = Math.floor((totalSec % 3600) / 60);
+            const s = totalSec % 60;
+            return pad(h) + ':' + pad(m) + ':' + pad(s);
+        }}
+
+        function getElapsed() {{
+            const saved = parseFloat(storage.getItem(KEY_ELAPSED) || '0');
+            const isRunning = storage.getItem(KEY_RUNNING) === 'true';
+            if (isRunning) {{
+                const startTime = parseFloat(storage.getItem(KEY_START) || '0');
+                return saved + (Date.now() - startTime) / 1000;
+            }}
+            return saved;
+        }}
+
+        function updateDisplay() {{
+            display.textContent = formatTime(Math.floor(getElapsed()));
+        }}
+
+        function toggleTimer() {{
+            const isRunning = storage.getItem(KEY_RUNNING) === 'true';
+            if (isRunning) {{
+                // Pause
+                const startTime = parseFloat(storage.getItem(KEY_START) || '0');
+                const elapsed = parseFloat(storage.getItem(KEY_ELAPSED) || '0');
+                storage.setItem(KEY_ELAPSED, String(elapsed + (Date.now() - startTime) / 1000));
+                storage.setItem(KEY_RUNNING, 'false');
+                clearInterval(interval);
+                btn.textContent = '▶ Start';
+                btn.style.background = '#6C63FF';
+            }} else {{
+                // Start
+                storage.setItem(KEY_START, String(Date.now()));
+                storage.setItem(KEY_RUNNING, 'true');
+                interval = setInterval(updateDisplay, 1000);
+                btn.textContent = '⏸ Pause';
+                btn.style.background = '#F59E0B';
+            }}
+        }}
+
+        function resetTimer() {{
+            clearInterval(interval);
+            storage.setItem(KEY_ELAPSED, '0');
+            storage.setItem(KEY_RUNNING, 'false');
+            display.textContent = '00:00:00';
+            btn.textContent = '▶ Start';
+            btn.style.background = '#6C63FF';
+        }}
+
+        // On load: restore state from storage
+        (function init() {{
+            const isRunning = storage.getItem(KEY_RUNNING) === 'true';
+            updateDisplay();
+            if (isRunning) {{
+                interval = setInterval(updateDisplay, 1000);
+                btn.textContent = '⏸ Pause';
+                btn.style.background = '#F59E0B';
+            }}
+        }})();
+    </script>
+    """, height=70)
 
     st.markdown("---")
 
@@ -2019,12 +2060,14 @@ Exercises NEVER used: {len(EXERCISE_DB) - len(exercise_freq)}
                 "role": "user",
                 "content": "I'd like to look up a specific Pilates exercise. Ask me which one!"
             })
+            st.session_state.ai_pending = True
             st.rerun()
         if st.button("💡 Suggest a workout", use_container_width=True, key="qa_suggest"):
             st.session_state.ai_messages.append({
                 "role": "user",
                 "content": "Can you recommend a Pilates workout for me? Ask me about my goals and how much time I have."
             })
+            st.session_state.ai_pending = True
             st.rerun()
     with qa_col2:
         if st.button("🩹 Modifications help", use_container_width=True, key="qa_mods"):
@@ -2032,12 +2075,14 @@ Exercises NEVER used: {len(EXERCISE_DB) - len(exercise_freq)}
                 "role": "user",
                 "content": "I need modifications for some exercises. Ask me about my limitations or injuries."
             })
+            st.session_state.ai_pending = True
             st.rerun()
         if st.button("📚 Explain springs/setup", use_container_width=True, key="qa_springs"):
             st.session_state.ai_messages.append({
                 "role": "user",
                 "content": "Can you explain how the spring system works on the Reformer and what the different colors mean?"
             })
+            st.session_state.ai_pending = True
             st.rerun()
 
     # History-specific quick actions
@@ -2050,12 +2095,14 @@ Exercises NEVER used: {len(EXERCISE_DB) - len(exercise_freq)}
                     "role": "user",
                     "content": "Look at my workout history — what exercises and muscle groups am I teaching the most? What am I over-indexing on?"
                 })
+                st.session_state.ai_pending = True
                 st.rerun()
             if st.button("🕳️ What am I missing?", use_container_width=True, key="qa_gaps"):
                 st.session_state.ai_messages.append({
                     "role": "user",
                     "content": "Analyze my history — what categories, muscle groups, or movement patterns am I neglecting? What gaps should I fill?"
                 })
+                st.session_state.ai_pending = True
                 st.rerun()
         with ha_col2:
             if st.button("⚖️ Am I balanced?", use_container_width=True, key="qa_balance"):
@@ -2063,27 +2110,17 @@ Exercises NEVER used: {len(EXERCISE_DB) - len(exercise_freq)}
                     "role": "user",
                     "content": "Give me an honest assessment of my programming balance. Am I hitting all muscle groups and movement patterns evenly across my history?"
                 })
+                st.session_state.ai_pending = True
                 st.rerun()
             if st.button("🎯 What should I teach next?", use_container_width=True, key="qa_next"):
                 st.session_state.ai_messages.append({
                     "role": "user",
                     "content": "Based on what I've been teaching recently, what should my next class focus on to keep my programming well-rounded?"
                 })
+                st.session_state.ai_pending = True
                 st.rerun()
 
     st.markdown("---")
-
-    # Build exercise knowledge for the AI
-    exercise_names = []
-    exercise_details = []
-    for ex in EXERCISE_DB:
-        exercise_names.append(ex.name)
-        exercise_details.append(
-            f"- {ex.name} ({ex.apparatus}): Category={ex.category}, Phase={ex.phase}, "
-            f"Springs={ex.default_springs}, Energy={ex.energy}/5, Level={ex.level}, "
-            f"Themes={','.join(ex.themes)}, Cues: {'; '.join(ex.cues[:2])}"
-        )
-    exercise_knowledge = "\n".join(exercise_details)
 
     # Chat display
     for msg in st.session_state.ai_messages:
@@ -2095,72 +2132,77 @@ Exercises NEVER used: {len(EXERCISE_DB) - len(exercise_freq)}
     # Chat input
     user_input = st.chat_input("Ask your Pilates coach anything...")
 
+    # If new text typed, add it and flag for response
     if user_input:
         st.session_state.ai_messages.append({"role": "user", "content": user_input})
+        st.session_state.ai_pending = True
 
-        try:
-            import anthropic
-            api_key = st.secrets.get("anthropic_api_key", "")
-            if not api_key:
-                response_text = ("To enable the AI Coach, add your Anthropic API key to Streamlit secrets:\n\n"
-                                 "`anthropic_api_key = \"sk-ant-your-key-here\"`\n\n"
-                                 "Get a key at [console.anthropic.com](https://console.anthropic.com)")
-            else:
-                client = anthropic.Anthropic(api_key=api_key)
+    # Check if there's a pending user message that needs a response
+    # Fires for BOTH typed input AND quick-action buttons
+    needs_response = st.session_state.get("ai_pending", False)
+    if not needs_response:
+        # Also check: last message is "user" with no response yet
+        msgs = st.session_state.ai_messages
+        if msgs and msgs[-1]["role"] == "user":
+            needs_response = True
 
-                system_prompt = f"""You are a warm, expert Pilates instructor and programming consultant named Coach Flow.
-You have deep knowledge of all Pilates apparatus (Reformer, Mat, Chair/Wunda Chair, Cadillac/Trapeze Table, Ladder Barrel, Spine Corrector).
+    if needs_response:
+        st.session_state.ai_pending = False  # Clear flag before API call
+        with st.spinner("🤖 Coach Flow is thinking..."):
+            try:
+                import anthropic
+                api_key = st.secrets.get("anthropic_api_key", "")
+                if not api_key:
+                    response_text = ("To enable the AI Coach, add your Anthropic API key to Streamlit secrets:\n\n"
+                                     "`anthropic_api_key = \"sk-ant-your-key-here\"`\n\n"
+                                     "Get a key at [console.anthropic.com](https://console.anthropic.com)")
+                else:
+                    client = anthropic.Anthropic(api_key=api_key)
 
-CRITICAL RULE: When recommending or discussing specific exercises, you must ONLY reference exercises 
-from the studio database listed below. NEVER invent or make up exercise names.
+                    # Build concise exercise list (name + category only to save tokens)
+                    exercise_list = "\n".join(
+                        f"- {ex.name} ({ex.apparatus}, {ex.category}, Phase:{ex.phase}, Level:{ex.level})"
+                        for ex in EXERCISE_DB
+                    )
 
-YOUR CAPABILITIES:
-1. EXERCISE LOOKUP: When asked about a specific exercise, explain it in detail — setup, springs, 
-   movement, cues, common mistakes, modifications, and target muscles.
-2. WORKOUT RECOMMENDATIONS: Use ONLY exercises from the database. Suggest structured sessions 
-   using the bell curve: Warmup -> Foundation -> Peak -> Cooldown.
-3. HISTORY ANALYSIS: You have access to {user}'s complete workout history below. When asked about 
-   patterns, gaps, frequency, muscle group focus, or programming balance — analyze this data and 
-   give specific, actionable insights. Reference specific exercises and numbers.
-4. PROGRAMMING ADVICE: Help them build better class plans. Identify what they're over-doing, 
-   what they're missing, and suggest exercises they've never tried.
-5. GENERAL PILATES KNOWLEDGE: Form, breathing, springs, anatomy, modifications, philosophy.
+                    system_prompt = f"""You are Coach Flow, a warm expert Pilates instructor and programming consultant.
+You know all Pilates apparatus: Reformer, Mat, Chair, Cadillac, Ladder Barrel, Spine Corrector.
 
-{history_summary if history_summary else "No workout history available yet for this user."}
+CRITICAL: Only reference exercises from our studio database. Never invent exercise names.
 
-OUR COMPLETE STUDIO EXERCISE DATABASE ({len(EXERCISE_DB)} exercises):
-{exercise_knowledge}
+CAPABILITIES:
+1. EXERCISE LOOKUP: Explain setup, springs, cues, modifications, target muscles.
+2. WORKOUT RECOMMENDATIONS: Use only database exercises. Bell curve: Warmup > Foundation > Peak > Cooldown.
+3. HISTORY ANALYSIS: You have {user}'s workout history below. Give specific numbers and actionable insights.
+4. PROGRAMMING ADVICE: Identify over-use, gaps, suggest untried exercises.
 
-STYLE:
-- Be direct and specific — use actual numbers from their history
-- When they ask "what am I doing most", give exact counts and percentages
-- When they ask about gaps, name specific exercises they should try
-- Be warm but honest — a good coach tells you what you need to hear
-- Format clearly with bullet points for data, prose for advice
-- Keep responses focused — concise for simple questions, thorough for analysis
+{history_summary if history_summary else "No workout history yet."}
 
-The user's name is {user}."""
+STUDIO DATABASE ({len(EXERCISE_DB)} exercises):
+{exercise_list}
 
-                # Build message history for context
-                api_messages = []
-                for msg in st.session_state.ai_messages:
-                    api_messages.append({"role": msg["role"], "content": msg["content"]})
+STYLE: Be direct with real numbers. Warm but honest. Concise for simple questions, thorough for analysis.
+User: {user}"""
 
-                response = client.messages.create(
-                    model="claude-sonnet-4-5-20250929",
-                    max_tokens=800,
-                    system=system_prompt,
-                    messages=api_messages,
-                )
-                response_text = response.content[0].text
+                    # Build message history (limit to last 10 for token savings)
+                    recent_messages = st.session_state.ai_messages[-10:]
+                    api_messages = [{"role": m["role"], "content": m["content"]} for m in recent_messages]
 
-        except ImportError:
-            response_text = "Install the `anthropic` package to enable AI chat."
-        except Exception as e:
-            response_text = f"Sorry, I couldn't process that: {e}"
+                    response = client.messages.create(
+                        model="claude-sonnet-4-5-20250929",
+                        max_tokens=1200,
+                        system=system_prompt,
+                        messages=api_messages,
+                    )
+                    response_text = response.content[0].text
 
-        st.session_state.ai_messages.append({"role": "assistant", "content": response_text})
-        st.rerun()
+            except ImportError:
+                response_text = "Install the `anthropic` package to enable AI chat."
+            except Exception as e:
+                response_text = f"Sorry, I couldn't process that: {e}"
+
+            st.session_state.ai_messages.append({"role": "assistant", "content": response_text})
+            st.rerun()
 
     # Clear chat button
     if st.session_state.ai_messages:
