@@ -20,6 +20,12 @@ from pilates_logic import (
     THEMES, APPARATUS_OPTIONS, ENERGY_LEVELS, PHASE_ORDER, EXERCISE_DB,
 )
 
+try:
+    from streamlit_autorefresh import st_autorefresh
+    HAS_AUTOREFRESH = True
+except ImportError:
+    HAS_AUTOREFRESH = False
+
 # ─────────────────────────────────────────────
 # Page Config
 # ─────────────────────────────────────────────
@@ -622,18 +628,18 @@ def analyze_workout_balance(workout: list[dict], theme: str) -> dict:
 # ─────────────────────────────────────────────
 
 def get_smart_recommendations(history_df: pd.DataFrame, user: str) -> list[str]:
-    """Analyze workout history and suggest what to do next."""
+    """Analyze workout history and suggest programming improvements — instructor perspective."""
     recs = []
     if history_df.empty:
-        recs.append("🌟 Welcome! Try a 30-minute Reformer session with the 'Core' theme to get started.")
+        recs.append("🌟 Start with a 30-min Reformer session using 'Core' theme — it's the foundation of every good Pilates practice.")
         return recs
 
     user_df = history_df[history_df["User"] == user] if "User" in history_df.columns else history_df
     if user_df.empty:
-        recs.append("🌟 No workouts yet — try a Reformer session to begin!")
+        recs.append("🌟 No workouts logged yet — try a Reformer session to get your baseline.")
         return recs
 
-    # Analyze apparatus usage
+    # Analyze apparatus coverage
     apparatus_used = []
     for _, row in user_df.iterrows():
         try:
@@ -646,49 +652,39 @@ def get_smart_recommendations(history_df: pd.DataFrame, user: str) -> list[str]:
             pass
 
     app_counts = Counter(apparatus_used)
-    all_apparatus = ["Reformer", "Mat", "Chair", "Cadillac"]
-    unused = [a for a in all_apparatus if a not in app_counts]
+    core_apparatus = ["Reformer", "Mat", "Chair", "Cadillac"]
+    unused = [a for a in core_apparatus if a not in app_counts]
     if unused:
-        recs.append(f"🔄 You haven't tried: {', '.join(unused)} — branch out for a more complete practice!")
+        recs.append(f"🔄 **Apparatus gap:** You haven't programmed {', '.join(unused)} yet — cross-training across apparatus builds more complete body awareness.")
 
     most_used = app_counts.most_common(1)
-    if most_used and most_used[0][1] > 3:
-        recs.append(f"⚖️ You've done {most_used[0][1]} sessions on {most_used[0][0]} — try a different apparatus for variety.")
+    total_sessions = len(user_df)
+    if most_used and total_sessions > 3:
+        top_app, top_count = most_used[0]
+        pct = top_count / total_sessions * 100
+        if pct > 65:
+            recs.append(f"⚖️ **Variety check:** {pct:.0f}% of your sessions are {top_app}. Consider alternating with a different apparatus to work different stabilizer patterns.")
 
-    # Analyze recency
-    try:
-        dates = pd.to_datetime(user_df["Date"], errors="coerce")
-        if not dates.empty:
-            last_workout = dates.max()
-            days_since = (pd.Timestamp.now() - last_workout).days
-            if days_since > 7:
-                recs.append(f"⏰ It's been {days_since} days since your last session — time to get moving!")
-            elif days_since <= 1:
-                recs.append("🔥 Back-to-back sessions! Consider a gentle recovery workout today.")
-
-            # Weekly frequency
-            last_30 = dates[dates > pd.Timestamp.now() - pd.Timedelta(days=30)]
-            weekly_avg = len(last_30) / 4.3
-            if weekly_avg < 2:
-                recs.append(f"📈 Averaging {weekly_avg:.1f} sessions/week — aim for 2-3 for best results.")
-            elif weekly_avg >= 3:
-                recs.append(f"💪 Great consistency! {weekly_avg:.1f} sessions/week.")
-    except Exception:
-        pass
-
-    # Theme suggestions
-    themes_used = []
-    for _, row in user_df.iterrows():
-        t = row.get("Theme", "")
-        if t:
-            themes_used.append(t)
+    # Theme coverage analysis
+    themes_used = [row.get("Theme", "") for _, row in user_df.iterrows() if row.get("Theme")]
     theme_counts = Counter(themes_used)
-    unused_themes = [t for t in THEMES if t not in theme_counts]
-    if unused_themes:
-        recs.append(f"🎯 Try a '{unused_themes[0]}' themed session — you haven't explored that focus yet.")
+    key_themes = ["Core", "Flexibility", "Upper Body", "Lower Body"]
+    missing_themes = [t for t in key_themes if t not in theme_counts]
+    if missing_themes:
+        recs.append(f"🎯 **Theme gap:** You haven't focused on {', '.join(missing_themes)} — a well-rounded program cycles through all movement themes over time.")
+
+    # Progression suggestion
+    if total_sessions >= 5:
+        recs.append("📐 **Progression idea:** After 5+ sessions at a given difficulty, try bumping one phase up — e.g. swap beginner Foundation exercises for intermediate ones while keeping Warmup and Cooldown the same.")
+
+    if total_sessions >= 10 and "Mat" not in app_counts:
+        recs.append("🧘 **Mat work builds intelligence:** Even dedicated Reformer practitioners benefit from Mat — it removes spring assistance and reveals where true strength lives.")
+
+    if total_sessions >= 3 and total_sessions < 10:
+        recs.append("📝 **Programming tip:** Build a 2-3 session weekly rotation — e.g. Mon: Reformer/Core, Wed: Mat/Flexibility, Fri: Reformer/Full Body — to ensure balanced development.")
 
     if not recs:
-        recs.append("🌟 You're doing great! Keep up the consistent practice.")
+        recs.append("✅ Your programming looks well-rounded — keep varying apparatus and themes to maintain progress.")
 
     return recs[:5]
 
@@ -1238,6 +1234,50 @@ elif st.session_state.view == "player" and st.session_state.workout:
                 st.session_state.view = "finish"
                 st.rerun()
 
+    # ─── Session Timer (always visible at top) ───
+    if st.session_state.timer_running and st.session_state.timer_start:
+        elapsed_t = st.session_state.elapsed + (
+            time_module.time() - st.session_state.timer_start
+        )
+        # Auto-refresh every second while running
+        if HAS_AUTOREFRESH:
+            st_autorefresh(interval=1000, limit=None, key="timer_tick")
+    else:
+        elapsed_t = st.session_state.elapsed
+
+    mins_t, secs_t = divmod(int(elapsed_t), 60)
+    hrs_t, mins_t = divmod(mins_t, 60)
+
+    timer_c1, timer_c2, timer_c3, timer_c4 = st.columns([3, 1, 1, 1])
+    with timer_c1:
+        st.markdown(
+            f'<div class="timer-display">{hrs_t:02d}:{mins_t:02d}:{secs_t:02d}</div>',
+            unsafe_allow_html=True,
+        )
+    with timer_c2:
+        if not st.session_state.timer_running:
+            if st.button("▶ Start", use_container_width=True, key="timer_start"):
+                st.session_state.timer_running = True
+                st.session_state.timer_start = time_module.time()
+                st.rerun()
+        else:
+            if st.button("⏸ Pause", use_container_width=True, key="timer_pause"):
+                st.session_state.elapsed += (
+                    time_module.time() - st.session_state.timer_start
+                )
+                st.session_state.timer_running = False
+                st.session_state.timer_start = None
+                st.rerun()
+    with timer_c3:
+        if st.button("↺ Reset", use_container_width=True, key="timer_reset"):
+            st.session_state.elapsed = 0
+            st.session_state.timer_running = False
+            st.session_state.timer_start = None
+            st.rerun()
+    with timer_c4:
+        est_total = sum(e.get("duration_min", 5) for e in workout)
+        st.caption(f"Est. {est_total}min")
+
     st.markdown("---")
 
     # Main content area
@@ -1268,47 +1308,6 @@ elif st.session_state.view == "player" and st.session_state.workout:
             for cue in cues:
                 if cue:
                     st.markdown(f'<div class="cue">▸ {cue}</div>', unsafe_allow_html=True)
-
-        # Timer
-        st.markdown("---")
-        st.markdown("#### ⏱ Session Timer")
-
-        timer_col1, timer_col2 = st.columns([2, 1])
-        with timer_col1:
-            if st.session_state.timer_running and st.session_state.timer_start:
-                elapsed = st.session_state.elapsed + (
-                    time_module.time() - st.session_state.timer_start
-                )
-            else:
-                elapsed = st.session_state.elapsed
-
-            mins, secs = divmod(int(elapsed), 60)
-            hrs, mins = divmod(mins, 60)
-            st.markdown(
-                f'<div class="timer-display">{hrs:02d}:{mins:02d}:{secs:02d}</div>',
-                unsafe_allow_html=True,
-            )
-
-        with timer_col2:
-            if not st.session_state.timer_running:
-                if st.button("▶ Start", use_container_width=True):
-                    st.session_state.timer_running = True
-                    st.session_state.timer_start = time_module.time()
-                    st.rerun()
-            else:
-                if st.button("⏸ Pause", use_container_width=True):
-                    st.session_state.elapsed += (
-                        time_module.time() - st.session_state.timer_start
-                    )
-                    st.session_state.timer_running = False
-                    st.session_state.timer_start = None
-                    st.rerun()
-
-            if st.button("↺ Reset", use_container_width=True):
-                st.session_state.elapsed = 0
-                st.session_state.timer_running = False
-                st.session_state.timer_start = None
-                st.rerun()
 
     # Chat column
     with chat_col:
@@ -1556,12 +1555,6 @@ elif st.session_state.view == "dashboard":
 
     st.markdown("---")
 
-    # ─── Weekly Activity Chart ───
-    if stats["weekly_data"]:
-        st.markdown("#### 📈 Weekly Activity (Last 8 Weeks)")
-        chart_df = pd.DataFrame(stats["weekly_data"])
-        st.bar_chart(chart_df.set_index("week"), color="#6C63FF")
-
     # ─── Apparatus & Theme Breakdown ───
     breakdown_col1, breakdown_col2 = st.columns(2)
 
@@ -1571,7 +1564,8 @@ elif st.session_state.view == "dashboard":
         if app_data:
             for apparatus_name, count in sorted(app_data.items(), key=lambda x: -x[1]):
                 pct = count / stats["total_workouts"] * 100 if stats["total_workouts"] else 0
-                st.markdown(f"**{apparatus_name}**: {count} sessions ({pct:.0f}%)")
+                label = "session" if count == 1 else "sessions"
+                st.markdown(f"**{apparatus_name}**: {count} {label} ({pct:.0f}%)")
                 st.progress(min(pct / 100, 1.0))
         else:
             st.caption("No data yet")
@@ -1582,15 +1576,16 @@ elif st.session_state.view == "dashboard":
         if theme_data:
             for theme_name, count in sorted(theme_data.items(), key=lambda x: -x[1]):
                 pct = count / stats["total_workouts"] * 100 if stats["total_workouts"] else 0
-                st.markdown(f"**{theme_name}**: {count} sessions ({pct:.0f}%)")
+                label = "session" if count == 1 else "sessions"
+                st.markdown(f"**{theme_name}**: {count} {label} ({pct:.0f}%)")
                 st.progress(min(pct / 100, 1.0))
         else:
             st.caption("No data yet")
 
     st.markdown("---")
 
-    # ─── Smart Recommendations ───
-    st.markdown("#### 🎯 Smart Recommendations")
+    # ─── Programming Insights ───
+    st.markdown("#### 📐 Programming Insights")
     recs = get_smart_recommendations(history, user)
     for rec in recs:
         st.markdown(f'<div style="background:white; padding:10px 14px; border-radius:10px; margin:6px 0; border-left:4px solid #6C63FF; font-size:0.95rem;">{rec}</div>', unsafe_allow_html=True)
@@ -1865,9 +1860,10 @@ elif st.session_state.view == "help":
 - Each exercise shows full details: name, springs, phase, cues, and category
 
 **Timer:**
-- Hit **▶ Start** to begin an elapsed time counter
+- The session timer sits at the top of the player view — always visible
+- Hit **▶ Start** to begin — it ticks live in real-time
 - **⏸ Pause** to stop it, **↺ Reset** to clear it
-- The timer runs per exercise so you know how long you've spent
+- Shows estimated total workout time on the right
 
 **AI Instructor:**
 - A chat box appears on each exercise
@@ -1895,7 +1891,6 @@ elif st.session_state.view == "help":
 - **Best Streak** — your personal record
 
 **Charts & Breakdowns:**
-- **Weekly Activity** bar chart — last 8 weeks of session counts
 - **Apparatus Breakdown** — percentage of time on each piece of equipment
 - **Theme Breakdown** — which focus areas you've been training
 
@@ -1903,9 +1898,10 @@ elif st.session_state.view == "help":
 - Purple dots mark days you worked out this month
 - A circle marks today's date
 
-**Smart Recommendations:**
-- The app analyzes your history and suggests what to do next
-- Examples: "You haven't tried Cadillac", "It's been 8 days — time to move!", "Try a Flexibility session"
+**Programming Insights:**
+- The app analyzes your history from an instructor perspective
+- Flags apparatus gaps, theme imbalances, and progression opportunities
+- Examples: "65% Reformer — alternate apparatus", "Build a 2-3 session weekly rotation"
 
 **Favorites:**
 - Quick-replay any workout you've starred
