@@ -231,11 +231,18 @@ st.markdown("""
         font-weight: 800 !important;
     }
 
-    /* Download button styling */
+    /* Download button styling — make PDF export pop */
     .stDownloadButton > button {
         min-height: 48px;
-        font-weight: 600;
+        font-weight: 700 !important;
         border-radius: 10px;
+        background: linear-gradient(135deg, #10B981 0%, #059669 100%) !important;
+        color: white !important;
+        border: none !important;
+        font-size: 1rem !important;
+    }
+    .stDownloadButton > button:hover {
+        background: linear-gradient(135deg, #059669 0%, #047857 100%) !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -1122,7 +1129,9 @@ Available exercises:
 
         # ─── Action Buttons ───
         st.markdown("---")
-        col_start, col_save, col_pdf = st.columns(3)
+
+        # Row 1: Primary actions
+        col_start, col_save = st.columns(2)
         with col_start:
             if st.button("▶️ Start Workout", type="primary", use_container_width=True):
                 st.session_state.view = "player"
@@ -1142,6 +1151,9 @@ Available exercises:
                 )
                 if saved:
                     st.toast("Workout saved! ✅")
+
+        # Row 2: Share & Favorite
+        col_pdf, col_fav = st.columns(2)
         with col_pdf:
             pdf_bytes = generate_workout_pdf(
                 workout, user,
@@ -1150,16 +1162,13 @@ Available exercises:
                 apparatus=meta.get("apparatus", ""),
             )
             st.download_button(
-                "📄 Export PDF",
+                "📄 SHARE / EXPORT PDF",
                 data=pdf_bytes,
                 file_name=f"pilates_workout_{date.today().isoformat()}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
             )
-
-        # Favorite button
-        fav_col1, fav_col2 = st.columns([3, 1])
-        with fav_col2:
+        with col_fav:
             if st.button("⭐ Save as Favorite", use_container_width=True, key="fav_gen"):
                 fav_data = {
                     "name": f"{w_theme} {meta.get('apparatus', '')} ({meta.get('duration', '')}min)",
@@ -1366,7 +1375,7 @@ elif st.session_state.view == "finish" and st.session_state.workout:
             apparatus=meta.get("apparatus", ""),
         )
         st.download_button(
-            "📄 Export PDF",
+            "📄 SHARE / EXPORT PDF",
             data=pdf_bytes,
             file_name=f"pilates_workout_{date.today().isoformat()}.pdf",
             mime="application/pdf",
@@ -1421,7 +1430,7 @@ elif st.session_state.view == "history":
         # Expandable detail view
         st.markdown("#### Session Details")
         for i, row in df.iterrows():
-            col_exp, col_btn = st.columns([5, 1])
+            col_exp, col_btn = st.columns([4, 2])
             with col_exp:
                 with st.expander(f"📋 {row['Date']} — {row['Theme']} ({row['Duration']} min)"):
                     try:
@@ -1455,7 +1464,8 @@ elif st.session_state.view == "history":
                     if row.get("Notes"):
                         st.markdown(f"*Notes: {row['Notes']}*")
             with col_btn:
-                if st.button("🔁", key=f"repeat_{i}", help="Load this workout"):
+                if st.button("🔁 Repeat", key=f"repeat_{i}", help="Load this workout",
+                              use_container_width=True):
                     try:
                         exercises = json_to_workout(row["Full_JSON_Data"])
                         st.session_state.workout = exercises
@@ -1472,9 +1482,10 @@ elif st.session_state.view == "history":
                             duration=int(row.get("Duration", 0)) if row.get("Duration") else 0,
                         )
                         st.download_button(
-                            "📄", data=pdf_data, key=f"pdf_{i}",
+                            "📄 PDF", data=pdf_data, key=f"pdf_{i}",
                             file_name=f"workout_{row.get('Date', 'export')}.pdf",
                             mime="application/pdf", help="Download PDF",
+                            use_container_width=True,
                         )
                 except Exception:
                     pass
