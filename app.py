@@ -355,6 +355,9 @@ def ensure_worksheets(spreadsheet):
         ws = spreadsheet.add_worksheet(title="class_prep", rows=500, cols=9)
         ws.append_row(["ID", "User", "Class_Name", "Date_Time", "Apparatus", "Theme",
                         "Duration", "Full_JSON_Data", "Status"])
+    if "favorites" not in existing:
+        ws = spreadsheet.add_worksheet(title="favorites", rows=500, cols=7)
+        ws.append_row(["ID", "User", "Name", "Apparatus", "Theme", "Duration", "Full_JSON_Data"])
 
 
 def save_workout(user: str, theme: str, duration: int, workout_json: str,
@@ -462,6 +465,62 @@ def update_class_status(class_id: str, new_status: str) -> bool:
         return False
     except Exception as e:
         st.warning(f"Update failed: {e}")
+        return False
+
+
+# ─────────────────────────────────────────────
+# Favorites (Google Sheets persistence)
+# ─────────────────────────────────────────────
+
+def save_favorite(user: str, name: str, apparatus: str, theme: str,
+                  duration: int, workout_json: str) -> bool:
+    """Save a workout as a persistent favorite in Google Sheets."""
+    spreadsheet = get_sheet()
+    if spreadsheet is None:
+        st.warning("Could not save — Google Sheets not connected.")
+        return False
+    try:
+        ensure_worksheets(spreadsheet)
+        ws = spreadsheet.worksheet("favorites")
+        fav_id = datetime.now().strftime("%Y%m%d%H%M%S")
+        ws.append_row([fav_id, user, name, apparatus, theme, duration, workout_json])
+        return True
+    except Exception as e:
+        st.warning(f"Save failed: {e}")
+        return False
+
+
+def load_favorites(user: str) -> pd.DataFrame:
+    """Load all favorites for a user."""
+    spreadsheet = get_sheet()
+    if spreadsheet is None:
+        return pd.DataFrame()
+    try:
+        ensure_worksheets(spreadsheet)
+        ws = spreadsheet.worksheet("favorites")
+        records = ws.get_all_records()
+        df = pd.DataFrame(records)
+        if df.empty:
+            return df
+        return df[df["User"] == user]
+    except Exception as e:
+        st.warning(f"Could not load favorites: {e}")
+        return pd.DataFrame()
+
+
+def delete_favorite(fav_id: str) -> bool:
+    """Delete a favorite by its ID."""
+    spreadsheet = get_sheet()
+    if spreadsheet is None:
+        return False
+    try:
+        ws = spreadsheet.worksheet("favorites")
+        cell = ws.find(str(fav_id), in_column=1)
+        if cell:
+            ws.delete_rows(cell.row)
+            return True
+        return False
+    except Exception:
         return False
 
 
@@ -940,7 +999,7 @@ st.markdown("""
 # Navigation — Big Bright Buttons
 # ─────────────────────────────────────────────
 
-nav_col1, nav_col2, nav_col3, nav_col4 = st.columns(4)
+nav_col1, nav_col2, nav_col3, nav_col4, nav_col5 = st.columns(5)
 with nav_col1:
     if st.button("🎲 GENERATE", use_container_width=True, type="primary",
                   key="nav_gen"):
@@ -958,6 +1017,11 @@ with nav_col3:
         st.session_state.view = "history"
         st.rerun()
 with nav_col4:
+    if st.button("⭐ FAVORITES", use_container_width=True, type="secondary",
+                  key="nav_fav"):
+        st.session_state.view = "favorites"
+        st.rerun()
+with nav_col5:
     if st.button("🤖 AI COACH", use_container_width=True, type="secondary",
                   key="nav_ai"):
         st.session_state.view = "ai_chat"
@@ -969,6 +1033,7 @@ active_labels = {
     "player": ("● Generate Workout", "#6C63FF"),
     "finish": ("● Generate Workout", "#6C63FF"),
     "classes": ("● My Classes", "#10B981"),
+    "favorites": ("● Favorites", "#F59E0B"),
     "dashboard": ("● Progress Dashboard", "#10B981"),
     "history": ("● Workout History", "#00B4D8"),
     "ai_chat": ("● AI Pilates Coach", "#FF6B35"),
@@ -1319,6 +1384,39 @@ Available exercises:
                         st.session_state["show_class_save"] = False
                         st.rerun()
 
+        # Row 3: Save as Favorite
+        if st.button("⭐ Save as Favorite", use_container_width=True, key="save_fav_gen"):
+            st.session_state["show_fav_save"] = True
+
+        if st.session_state.get("show_fav_save", False):
+            with st.container():
+                st.markdown("##### ⭐ Save as Favorite")
+                fav_name = st.text_input(
+                    "Favorite name",
+                    value=f"{meta.get('apparatus', 'Reformer')} {w_theme} ({meta.get('duration', '')}min)",
+                    placeholder="e.g. My Go-To Core Blast",
+                    key="fav_name",
+                )
+                fav_save_col, fav_cancel_col = st.columns(2)
+                with fav_save_col:
+                    if st.button("✅ Save Favorite", type="primary", use_container_width=True, key="fav_confirm"):
+                        saved = save_favorite(
+                            user=user,
+                            name=fav_name,
+                            apparatus=meta.get("apparatus", ""),
+                            theme=w_theme,
+                            duration=meta.get("duration", 0),
+                            workout_json=workout_to_json(workout),
+                        )
+                        if saved:
+                            st.toast(f"⭐ Saved: {fav_name}")
+                            st.session_state["show_fav_save"] = False
+                            st.rerun()
+                with fav_cancel_col:
+                    if st.button("Cancel", use_container_width=True, key="fav_cancel"):
+                        st.session_state["show_fav_save"] = False
+                        st.rerun()
+
 
 # ─────────────────────────────────────────────
 # View: Player
@@ -1457,6 +1555,14 @@ elif st.session_state.view == "player" and st.session_state.workout:
         # Exercise title and info
         st.markdown(f"## {ex.get('name', 'Exercise')}")
 
+        # Exercise image (if available in /assets)
+        ex_image = ex.get("image", "")
+        if ex_image:
+            import os
+            image_path = os.path.join("assets", ex_image)
+            if os.path.exists(image_path):
+                st.image(image_path, use_container_width=True)
+
         info_cols = st.columns(3)
         with info_cols[0]:
             st.metric("Apparatus", ex.get("apparatus", "Reformer"))
@@ -1473,10 +1579,43 @@ elif st.session_state.view == "player" and st.session_state.workout:
                 if cue:
                     st.markdown(f'<div class="cue">▸ {cue}</div>', unsafe_allow_html=True)
 
+        # Video tutorial link (if available)
+        video_url = ex.get("video_url", "")
+        if video_url:
+            st.markdown(f'<a href="{video_url}" target="_blank" style="display:inline-block; '
+                        f'padding:8px 16px; background:#FF0000; color:white; border-radius:8px; '
+                        f'text-decoration:none; font-weight:600; font-size:0.9rem; margin-top:8px;">'
+                        f'▶ Watch Tutorial on YouTube</a>', unsafe_allow_html=True)
+
     # Chat column
     with chat_col:
         st.markdown("#### 💬 Ask Instructor")
         st.caption(f"Context: *{ex['name']}*")
+
+        # ─── Spotify Embed (ambient music) ───
+        with st.expander("🎵 Workout Music", expanded=False):
+            spotify_url = st.text_input(
+                "Paste a Spotify playlist URL",
+                value=st.session_state.get("spotify_url", ""),
+                placeholder="https://open.spotify.com/playlist/...",
+                key="spotify_input",
+                label_visibility="collapsed",
+            )
+            if spotify_url and "spotify.com" in spotify_url:
+                st.session_state["spotify_url"] = spotify_url
+                # Convert URL to embed URL
+                embed_url = spotify_url.replace("open.spotify.com/", "open.spotify.com/embed/")
+                if "?" not in embed_url:
+                    embed_url += "?utm_source=generator&theme=0"
+                st.components.v1.html(
+                    f'<iframe style="border-radius:12px" src="{embed_url}" '
+                    f'width="100%" height="152" frameBorder="0" allowfullscreen="" '
+                    f'allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" '
+                    f'loading="lazy"></iframe>',
+                    height=165,
+                )
+            else:
+                st.caption("Paste any Spotify playlist link to play music during your workout.")
 
         # Display chat history
         for msg in st.session_state.chat_messages:
@@ -1586,6 +1725,20 @@ elif st.session_state.view == "finish" and st.session_state.workout:
             )
             if saved:
                 st.toast(f"📋 Saved to My Classes: {cp_name}")
+
+    # Row 3: Favorite from finish screen
+    if st.button("⭐ Save as Favorite", use_container_width=True, key="fav_finish"):
+        fav_name = f"{meta.get('theme', 'Workout')} {meta.get('apparatus', '')} ({int(total_time)}min)"
+        saved = save_favorite(
+            user=user,
+            name=fav_name,
+            apparatus=meta.get("apparatus", ""),
+            theme=meta.get("theme", ""),
+            duration=int(total_time),
+            workout_json=workout_to_json(workout),
+        )
+        if saved:
+            st.toast(f"⭐ Favorited: {fav_name}")
 
 
 # ─────────────────────────────────────────────
@@ -2224,6 +2377,109 @@ User: {user}"""
 
 
 # ─────────────────────────────────────────────
+# View: Favorites
+# ─────────────────────────────────────────────
+
+elif st.session_state.view == "favorites":
+    st.markdown(f"### ⭐ Favorites — {user}")
+    st.caption("Your bookmarked workouts — saved to Google Sheets so they persist forever.")
+
+    favs = load_favorites(user)
+
+    if favs.empty:
+        st.info("No favorites yet! Generate a workout, then tap **⭐ Save as Favorite** to bookmark it.")
+    else:
+        for _, row in favs.iterrows():
+            fav_name = row.get("Name", "Unnamed")
+            fav_apparatus = row.get("Apparatus", "")
+            fav_theme = row.get("Theme", "")
+            fav_duration = row.get("Duration", "")
+            fav_id = row.get("ID", "")
+
+            meta_parts = []
+            if fav_apparatus:
+                meta_parts.append(fav_apparatus)
+            if fav_theme:
+                meta_parts.append(fav_theme)
+            if fav_duration:
+                meta_parts.append(f"{fav_duration} min")
+
+            st.markdown(
+                f'<div style="background:white; padding:14px 18px; border-radius:12px; margin:8px 0; '
+                f'border-left:5px solid #F59E0B; box-shadow:0 2px 8px rgba(0,0,0,0.06);">'
+                f'<div style="font-size:1.1rem; font-weight:700; margin-bottom:4px;">⭐ {fav_name}</div>'
+                f'<div style="color:#666; font-size:0.9rem;">{"  ·  ".join(meta_parts)}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            btn_c1, btn_c2, btn_c3 = st.columns(3)
+
+            with btn_c1:
+                if st.button("▶️ Start", key=f"fav_play_{fav_id}", use_container_width=True,
+                              type="primary"):
+                    try:
+                        exercises = json_to_workout(row["Full_JSON_Data"])
+                        st.session_state.workout = exercises
+                        st.session_state.workout_meta = {
+                            "theme": fav_theme, "apparatus": fav_apparatus,
+                            "duration": int(fav_duration) if fav_duration else 0,
+                        }
+                        st.session_state.view = "player"
+                        st.session_state.current_index = 0
+                        st.session_state.timer_running = False
+                        st.session_state.elapsed = 0
+                        st.rerun()
+                    except Exception:
+                        st.error("Could not load this favorite.")
+
+            with btn_c2:
+                try:
+                    pdf_exercises = json_to_workout(row["Full_JSON_Data"])
+                    if pdf_exercises:
+                        pdf_data = generate_workout_pdf(
+                            pdf_exercises, user,
+                            theme=fav_theme,
+                            duration=int(fav_duration) if fav_duration else 0,
+                            apparatus=fav_apparatus,
+                        )
+                        pdf_download_link(
+                            pdf_data,
+                            f"favorite_{fav_name.replace(' ', '_')}.pdf",
+                            "📄 PDF",
+                        )
+                except Exception:
+                    pass
+
+            with btn_c3:
+                if st.button("🗑️ Remove", key=f"fav_del_{fav_id}", use_container_width=True):
+                    if delete_favorite(str(fav_id)):
+                        st.toast(f"Removed: {fav_name}")
+                        st.rerun()
+
+            # Expandable exercise list
+            with st.expander("View exercises", expanded=False):
+                try:
+                    exercises = json_to_workout(row["Full_JSON_Data"])
+                    current_phase = ""
+                    for j, fav_ex in enumerate(exercises):
+                        phase = fav_ex.get('phase_label', fav_ex.get('phase', '')).capitalize() if fav_ex.get('phase_label') or fav_ex.get('phase') else ''
+                        if phase and phase != current_phase:
+                            current_phase = phase
+                            phase_colors = {"Warmup": "#FF6B35", "Foundation": "#E6394A", "Peak": "#9B5DE5", "Cooldown": "#00B4D8"}
+                            p_color = phase_colors.get(phase, "#666")
+                            st.markdown(f'<div style="background:{p_color}; color:white; padding:3px 8px; border-radius:5px; font-weight:700; font-size:0.75rem; margin:6px 0 3px 0; display:inline-block;">{phase.upper()}</div>', unsafe_allow_html=True)
+                        name = fav_ex.get('name', 'Unknown')
+                        springs = fav_ex.get('default_springs', fav_ex.get('springs', ''))
+                        line = f"**{j+1}. {name}**"
+                        if springs and springs != "N/A":
+                            line += f" — {springs}"
+                        st.markdown(line)
+                except Exception:
+                    st.caption("Could not parse exercises.")
+
+
+# ─────────────────────────────────────────────
 # View: Help & Features
 # ─────────────────────────────────────────────
 
@@ -2297,6 +2553,11 @@ elif st.session_state.view == "help":
 **Swap mid-workout:**
 - Tap **🔄 Swap This Exercise** to replace the current move without leaving the player
 
+**New features:**
+- **Exercise images** — if an image exists in `/assets`, it appears above the exercise info
+- **Video tutorials** — exercises with YouTube links show a red "Watch Tutorial" button
+- **Spotify music** — expand the 🎵 Workout Music panel, paste any Spotify playlist link, and music plays inline
+
 **Finishing:**
 - Tap **✅ Finish** on the last exercise
 - Rate your session (1–5 stars) and add optional notes
@@ -2348,6 +2609,23 @@ elif st.session_state.view == "help":
 - **📄** — Download a PDF of this past workout
 
 **Notes:** Your history is saved to Google Sheets and persists forever — it won't disappear when the app restarts.
+        """)
+
+    # ─── Favorites ───
+    with st.expander("⭐ **FAVORITES** — Replay your best sessions"):
+        st.markdown("""
+**How it works:**
+- After generating or finishing a workout, tap **⭐ Save as Favorite**
+- Give it a name (e.g. "My Go-To Core Blast")
+- Find it anytime in the **⭐ FAVORITES** tab
+
+**Actions on each favorite:**
+- **▶️ Start** — load it directly into the player
+- **📄 PDF** — download a PDF to share or print
+- **🗑️ Remove** — delete it from your favorites
+- **View exercises** — expand to see the full workout breakdown
+
+**Persistence:** Favorites are saved to Google Sheets — they survive app restarts and work across all your devices.
         """)
 
     # ─── AI Coach ───
