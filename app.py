@@ -1,15 +1,18 @@
 """
 app.py — The Pilates Flow Studio
 Main Streamlit application with Google Sheets persistence,
-workout generator, player view, and AI instructor chat.
+workout generator, player view, AI instructor chat,
+progress dashboard, PDF export, and smart recommendations.
 """
 
 import streamlit as st
 import pandas as pd
 import gspread
 import json
+import io
 import time as time_module
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
+from collections import Counter
 from google.oauth2.service_account import Credentials
 
 from pilates_logic import (
@@ -215,6 +218,25 @@ st.markdown("""
     .stChatInput {
         border-radius: 12px !important;
     }
+
+    /* Dashboard metrics */
+    [data-testid="stMetric"] {
+        background: white;
+        border-radius: 12px;
+        padding: 12px 16px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1.4rem !important;
+        font-weight: 800 !important;
+    }
+
+    /* Download button styling */
+    .stDownloadButton > button {
+        min-height: 48px;
+        font-weight: 600;
+        border-radius: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -397,6 +419,355 @@ Focus on form, safety, modifications, and mind-body connection. Use encouraging 
 
 
 # ─────────────────────────────────────────────
+# PDF Export
+# ─────────────────────────────────────────────
+
+def generate_workout_pdf(workout: list[dict], user: str, theme: str = "",
+                          duration: int = 0, apparatus: str = "") -> bytes:
+    """Generate a clean PDF of a workout plan."""
+    from fpdf import FPDF
+
+    class WorkoutPDF(FPDF):
+        def header(self):
+            self.set_font("Helvetica", "B", 18)
+            self.cell(0, 10, "The Pilates Flow Studio", align="C", new_x="LMARGIN", new_y="NEXT")
+            self.set_font("Helvetica", "I", 10)
+            self.cell(0, 6, "Intelligent Pilates Programming", align="C", new_x="LMARGIN", new_y="NEXT")
+            self.line(10, self.get_y() + 2, 200, self.get_y() + 2)
+            self.ln(6)
+
+        def footer(self):
+            self.set_y(-15)
+            self.set_font("Helvetica", "I", 8)
+            self.cell(0, 10, f"Page {self.page_no()}/{{nb}}", align="C")
+
+    pdf = WorkoutPDF()
+    pdf.alias_nb_pages()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=20)
+
+    # Workout metadata
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 8, f"Workout Plan for {user}", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 6, f"Date: {date.today().strftime('%B %d, %Y')}", new_x="LMARGIN", new_y="NEXT")
+    if apparatus:
+        pdf.cell(0, 6, f"Apparatus: {apparatus}  |  Theme: {theme}  |  Duration: {duration} min", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    # Exercises grouped by phase
+    current_phase = ""
+    phase_colors = {
+        "Warmup": (255, 107, 53), "Foundation": (230, 57, 70),
+        "Peak": (155, 93, 229), "Cooldown": (0, 180, 216),
+    }
+
+    for i, ex in enumerate(workout):
+        phase = ex.get("phase_label", ex.get("phase", "")).capitalize()
+        if phase != current_phase:
+            current_phase = phase
+            pdf.ln(3)
+            r, g, b = phase_colors.get(phase, (100, 100, 100))
+            pdf.set_fill_color(r, g, b)
+            pdf.set_text_color(255, 255, 255)
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.cell(0, 8, f"  {phase.upper()}", fill=True, new_x="LMARGIN", new_y="NEXT")
+            pdf.set_text_color(0, 0, 0)
+            pdf.ln(2)
+
+        # Exercise row
+        name = ex.get("name", "Exercise")
+        springs = ex.get("default_springs", ex.get("springs", ""))
+        dur = ex.get("duration_min", 5)
+        cues = ex.get("cues", [])
+
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(0, 6, f"{i+1}. {name}", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 9)
+        meta_parts = []
+        if springs and springs != "N/A":
+            meta_parts.append(f"Springs: {springs}")
+        meta_parts.append(f"{dur} min")
+        category = ex.get("category", "")
+        if category:
+            meta_parts.append(category)
+        pdf.set_text_color(100, 100, 100)
+        pdf.cell(0, 5, "    " + "  |  ".join(meta_parts), new_x="LMARGIN", new_y="NEXT")
+
+        # Cues
+        if isinstance(cues, list):
+            for cue in cues[:3]:
+                if cue and str(cue).strip():
+                    pdf.set_text_color(80, 80, 80)
+                    pdf.set_font("Helvetica", "I", 9)
+                    pdf.cell(0, 5, f"       {cue}", new_x="LMARGIN", new_y="NEXT")
+        pdf.set_text_color(0, 0, 0)
+        pdf.ln(1)
+
+    # Notes section at bottom
+    pdf.ln(6)
+    pdf.set_draw_color(200, 200, 200)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "B", 10)
+    pdf.cell(0, 6, "Notes:", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 9)
+    for _ in range(4):
+        pdf.cell(0, 8, "_" * 95, new_x="LMARGIN", new_y="NEXT")
+
+    return pdf.output()
+
+
+# ─────────────────────────────────────────────
+# Workout Balance Analysis
+# ─────────────────────────────────────────────
+
+def analyze_workout_balance(workout: list[dict], theme: str) -> dict:
+    """Analyze a workout for balance and coverage. Returns stats + suggestions."""
+    if not workout:
+        return {"score": 0, "notes": [], "categories": {}}
+
+    phases = Counter(ex.get("phase_label", "").capitalize() for ex in workout)
+    categories = Counter(ex.get("category", "Unknown") for ex in workout)
+    themes_hit = set()
+    for ex in workout:
+        for t in ex.get("themes", []):
+            themes_hit.add(t)
+
+    total = len(workout)
+    notes = []
+    score = 100
+
+    # Check phase balance
+    warmup_pct = phases.get("Warmup", 0) / total * 100
+    cooldown_pct = phases.get("Cooldown", 0) / total * 100
+    if warmup_pct < 10:
+        notes.append("⚠️ Light on warmup — consider adding a prep exercise")
+        score -= 10
+    if cooldown_pct < 10:
+        notes.append("⚠️ Light on cooldown — add a stretch or mobility move")
+        score -= 10
+
+    # Check if theme is covered
+    if theme != "Full Body" and theme not in themes_hit:
+        notes.append(f"⚠️ Your theme '{theme}' isn't well represented — try swapping in themed exercises")
+        score -= 15
+
+    # Check body region balance
+    upper = sum(1 for ex in workout if "Upper Body" in ex.get("themes", []))
+    lower = sum(1 for ex in workout if "Lower Body" in ex.get("themes", []))
+    core = sum(1 for ex in workout if "Core" in ex.get("themes", []))
+
+    if upper == 0:
+        notes.append("💡 No upper body work — consider adding arms or pulling straps")
+        score -= 10
+    if lower == 0:
+        notes.append("💡 No lower body work — consider adding footwork or hip exercises")
+        score -= 10
+    if core == 0:
+        notes.append("💡 No core focus — the center of Pilates! Add abdominal work")
+        score -= 15
+
+    # Check variety
+    if len(categories) < 3:
+        notes.append("💡 Low variety — try exercises from different categories for a more complete session")
+        score -= 10
+
+    if not notes:
+        notes.append("✅ Well-balanced workout! Great mix of phases, body regions, and categories.")
+
+    score = max(0, min(100, score))
+
+    return {
+        "score": score,
+        "notes": notes,
+        "phases": dict(phases),
+        "categories": dict(categories),
+        "body_regions": {"Upper Body": upper, "Lower Body": lower, "Core": core},
+        "themes_covered": list(themes_hit),
+    }
+
+
+# ─────────────────────────────────────────────
+# Smart Recommendations
+# ─────────────────────────────────────────────
+
+def get_smart_recommendations(history_df: pd.DataFrame, user: str) -> list[str]:
+    """Analyze workout history and suggest what to do next."""
+    recs = []
+    if history_df.empty:
+        recs.append("🌟 Welcome! Try a 30-minute Reformer session with the 'Core' theme to get started.")
+        return recs
+
+    user_df = history_df[history_df["User"] == user] if "User" in history_df.columns else history_df
+    if user_df.empty:
+        recs.append("🌟 No workouts yet — try a Reformer session to begin!")
+        return recs
+
+    # Analyze apparatus usage
+    apparatus_used = []
+    for _, row in user_df.iterrows():
+        try:
+            exercises = json.loads(row.get("Full_JSON_Data", "[]"))
+            if isinstance(exercises, dict):
+                apparatus_used.append(exercises.get("apparatus", "Unknown"))
+            elif isinstance(exercises, list) and exercises:
+                apparatus_used.append(exercises[0].get("apparatus", "Unknown"))
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    app_counts = Counter(apparatus_used)
+    all_apparatus = ["Reformer", "Mat", "Chair", "Cadillac"]
+    unused = [a for a in all_apparatus if a not in app_counts]
+    if unused:
+        recs.append(f"🔄 You haven't tried: {', '.join(unused)} — branch out for a more complete practice!")
+
+    most_used = app_counts.most_common(1)
+    if most_used and most_used[0][1] > 3:
+        recs.append(f"⚖️ You've done {most_used[0][1]} sessions on {most_used[0][0]} — try a different apparatus for variety.")
+
+    # Analyze recency
+    try:
+        dates = pd.to_datetime(user_df["Date"], errors="coerce")
+        if not dates.empty:
+            last_workout = dates.max()
+            days_since = (pd.Timestamp.now() - last_workout).days
+            if days_since > 7:
+                recs.append(f"⏰ It's been {days_since} days since your last session — time to get moving!")
+            elif days_since <= 1:
+                recs.append("🔥 Back-to-back sessions! Consider a gentle recovery workout today.")
+
+            # Weekly frequency
+            last_30 = dates[dates > pd.Timestamp.now() - pd.Timedelta(days=30)]
+            weekly_avg = len(last_30) / 4.3
+            if weekly_avg < 2:
+                recs.append(f"📈 Averaging {weekly_avg:.1f} sessions/week — aim for 2-3 for best results.")
+            elif weekly_avg >= 3:
+                recs.append(f"💪 Great consistency! {weekly_avg:.1f} sessions/week.")
+    except Exception:
+        pass
+
+    # Theme suggestions
+    themes_used = []
+    for _, row in user_df.iterrows():
+        t = row.get("Theme", "")
+        if t:
+            themes_used.append(t)
+    theme_counts = Counter(themes_used)
+    unused_themes = [t for t in THEMES if t not in theme_counts]
+    if unused_themes:
+        recs.append(f"🎯 Try a '{unused_themes[0]}' themed session — you haven't explored that focus yet.")
+
+    if not recs:
+        recs.append("🌟 You're doing great! Keep up the consistent practice.")
+
+    return recs[:5]
+
+
+# ─────────────────────────────────────────────
+# Progress Stats
+# ─────────────────────────────────────────────
+
+def calculate_progress_stats(history_df: pd.DataFrame, user: str) -> dict:
+    """Calculate streaks, totals, and trends for the progress dashboard."""
+    stats = {
+        "total_workouts": 0, "total_minutes": 0, "avg_rating": 0,
+        "current_streak": 0, "best_streak": 0, "this_week": 0,
+        "this_month": 0, "apparatus_breakdown": {}, "theme_breakdown": {},
+        "weekly_data": [], "ratings_over_time": [],
+    }
+
+    if history_df.empty:
+        return stats
+
+    user_df = history_df[history_df["User"] == user] if "User" in history_df.columns else history_df
+    if user_df.empty:
+        return stats
+
+    stats["total_workouts"] = len(user_df)
+
+    # Total minutes
+    durations = pd.to_numeric(user_df.get("Duration", pd.Series(dtype=float)), errors="coerce")
+    stats["total_minutes"] = int(durations.sum()) if not durations.empty else 0
+
+    # Average rating
+    ratings = pd.to_numeric(user_df.get("Rating", pd.Series(dtype=float)), errors="coerce").dropna()
+    stats["avg_rating"] = round(ratings.mean(), 1) if not ratings.empty else 0
+
+    # Dates analysis
+    try:
+        dates = pd.to_datetime(user_df["Date"], errors="coerce").dropna().sort_values()
+        if not dates.empty:
+            unique_dates = sorted(set(dates.dt.date))
+            today = date.today()
+
+            # This week / month
+            week_start = today - timedelta(days=today.weekday())
+            month_start = today.replace(day=1)
+            stats["this_week"] = sum(1 for d in unique_dates if d >= week_start)
+            stats["this_month"] = sum(1 for d in unique_dates if d >= month_start)
+
+            # Streak calculation
+            current_streak = 0
+            best_streak = 0
+            streak = 1
+            for i in range(len(unique_dates) - 1, 0, -1):
+                diff = (unique_dates[i] - unique_dates[i-1]).days
+                if diff <= 3:  # Allow up to 3 days gap (rest days are normal in Pilates)
+                    streak += 1
+                else:
+                    best_streak = max(best_streak, streak)
+                    streak = 1
+            best_streak = max(best_streak, streak)
+
+            # Current streak (from today backwards)
+            if unique_dates and (today - unique_dates[-1]).days <= 3:
+                current_streak = 1
+                for i in range(len(unique_dates) - 1, 0, -1):
+                    diff = (unique_dates[i] - unique_dates[i-1]).days
+                    if diff <= 3:
+                        current_streak += 1
+                    else:
+                        break
+
+            stats["current_streak"] = current_streak
+            stats["best_streak"] = best_streak
+
+            # Weekly data for chart (last 8 weeks)
+            weekly_data = []
+            for w in range(7, -1, -1):
+                wk_start = today - timedelta(days=today.weekday() + 7 * w)
+                wk_end = wk_start + timedelta(days=6)
+                count = sum(1 for d in unique_dates if wk_start <= d <= wk_end)
+                weekly_data.append({"week": wk_start.strftime("%b %d"), "workouts": count})
+            stats["weekly_data"] = weekly_data
+    except Exception:
+        pass
+
+    # Apparatus breakdown
+    for _, row in user_df.iterrows():
+        try:
+            exercises = json.loads(row.get("Full_JSON_Data", "[]"))
+            if isinstance(exercises, dict):
+                a = exercises.get("apparatus", "Unknown")
+            elif isinstance(exercises, list) and exercises:
+                a = exercises[0].get("apparatus", "Unknown")
+            else:
+                a = "Unknown"
+            stats["apparatus_breakdown"][a] = stats["apparatus_breakdown"].get(a, 0) + 1
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Theme breakdown
+    for _, row in user_df.iterrows():
+        t = row.get("Theme", "Unknown")
+        if t:
+            stats["theme_breakdown"][t] = stats["theme_breakdown"].get(t, 0) + 1
+
+    return stats
+
+
+# ─────────────────────────────────────────────
 # Session State Initialization
 # ─────────────────────────────────────────────
 
@@ -406,10 +777,12 @@ DEFAULTS = {
     "timer_running": False,
     "timer_start": None,
     "elapsed": 0,
-    "view": "generator",       # "generator", "player", "history", "ai_chat"
+    "view": "generator",       # "generator", "player", "history", "ai_chat", "dashboard"
     "chat_messages": [],
     "workout_rated": False,
     "ai_messages": [],         # General AI chat history
+    "workout_meta": {},        # Store theme/apparatus/duration for current workout
+    "favorites": [],           # List of favorite workout JSON strings
 }
 for key, val in DEFAULTS.items():
     if key not in st.session_state:
@@ -433,6 +806,10 @@ with st.sidebar:
     st.markdown("---")
     st.caption("Pilates Flow Studio v1.0")
     st.caption(f"Logged in as: **{user}**")
+    st.markdown("---")
+    if st.button("❓ Help & Features", use_container_width=True, key="nav_help"):
+        st.session_state.view = "help"
+        # no rerun needed, falls through
 
 
 # ─────────────────────────────────────────────
@@ -450,31 +827,42 @@ st.markdown("""
 # Navigation — Big Bright Buttons
 # ─────────────────────────────────────────────
 
-nav_col1, nav_col2, nav_col3 = st.columns(3)
+nav_col1, nav_col2, nav_col3, nav_col4 = st.columns(4)
 with nav_col1:
-    if st.button("🎲  GENERATE", use_container_width=True, type="primary",
+    if st.button("🎲 GENERATE", use_container_width=True, type="primary",
                   key="nav_gen"):
         st.session_state.view = "generator"
         st.session_state.workout = None
         st.rerun()
 with nav_col2:
-    if st.button("📖  HISTORY", use_container_width=True, type="secondary",
+    if st.button("📊 DASHBOARD", use_container_width=True, type="secondary",
+                  key="nav_dash"):
+        st.session_state.view = "dashboard"
+        st.rerun()
+with nav_col3:
+    if st.button("📖 HISTORY", use_container_width=True, type="secondary",
                   key="nav_hist"):
         st.session_state.view = "history"
         st.rerun()
-with nav_col3:
-    if st.button("🤖  AI COACH", use_container_width=True, type="secondary",
+with nav_col4:
+    if st.button("🤖 AI COACH", use_container_width=True, type="secondary",
                   key="nav_ai"):
         st.session_state.view = "ai_chat"
         st.rerun()
 
 # Show which view is active
-if st.session_state.view in ("generator", "player", "finish"):
-    st.markdown('<div style="text-align:center; color:#6C63FF; font-weight:700; font-size:0.9rem; margin-bottom:0.5rem;">● Generate Workout</div>', unsafe_allow_html=True)
-elif st.session_state.view == "history":
-    st.markdown('<div style="text-align:center; color:#00B4D8; font-weight:700; font-size:0.9rem; margin-bottom:0.5rem;">● Workout History</div>', unsafe_allow_html=True)
-elif st.session_state.view == "ai_chat":
-    st.markdown('<div style="text-align:center; color:#FF6B35; font-weight:700; font-size:0.9rem; margin-bottom:0.5rem;">● AI Pilates Coach</div>', unsafe_allow_html=True)
+active_labels = {
+    "generator": ("● Generate Workout", "#6C63FF"),
+    "player": ("● Generate Workout", "#6C63FF"),
+    "finish": ("● Generate Workout", "#6C63FF"),
+    "dashboard": ("● Progress Dashboard", "#10B981"),
+    "history": ("● Workout History", "#00B4D8"),
+    "ai_chat": ("● AI Pilates Coach", "#FF6B35"),
+    "help": ("● Help & Features", "#888"),
+}
+label, color = active_labels.get(st.session_state.view, ("", "#666"))
+if label:
+    st.markdown(f'<div style="text-align:center; color:{color}; font-weight:700; font-size:0.9rem; margin-bottom:0.5rem;">{label}</div>', unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -490,18 +878,29 @@ if st.session_state.view == "generator":
     with col1:
         duration = st.slider("Duration (min)", 30, 90, 50, step=5)
         apparatus = st.selectbox("Apparatus", APPARATUS_OPTIONS)
+        difficulty = st.selectbox("Difficulty", ["All Levels", "Beginner", "Intermediate", "Advanced"])
     with col2:
         theme = st.selectbox("Theme / Focus", THEMES)
         energy = st.selectbox("Energy Level", list(ENERGY_LEVELS.keys()))
 
     if st.button("🎲 Generate Workout", type="primary", use_container_width=True):
         workout = generate_workout(duration, apparatus, theme, energy)
+        # Filter by difficulty if selected
+        if difficulty != "All Levels":
+            diff_lower = difficulty.lower()
+            filtered = [ex for ex in workout if ex.get("level", "all") in (diff_lower, "all")]
+            if len(filtered) >= 4:
+                workout = filtered
         st.session_state.workout = workout
         st.session_state.current_index = 0
         st.session_state.timer_running = False
         st.session_state.elapsed = 0
         st.session_state.chat_messages = []
         st.session_state.workout_rated = False
+        st.session_state.workout_meta = {
+            "theme": theme, "apparatus": apparatus,
+            "duration": duration, "energy": energy, "difficulty": difficulty,
+        }
 
     # Display generated workout
     if st.session_state.workout:
@@ -697,8 +1096,33 @@ Available exercises:
 
                         st.markdown('</div>', unsafe_allow_html=True)
 
+        # ─── Workout Balance Analysis ───
         st.markdown("---")
-        col_start, col_save = st.columns(2)
+        meta = st.session_state.get("workout_meta", {})
+        w_theme = meta.get("theme", "Full Body")
+        analysis = analyze_workout_balance(workout, w_theme)
+
+        score = analysis["score"]
+        score_color = "#10B981" if score >= 80 else "#F59E0B" if score >= 60 else "#EF4444"
+        st.markdown(f'<div style="text-align:center; margin-bottom:0.5rem;">'
+                    f'<span style="font-size:2rem; font-weight:800; color:{score_color};">{score}</span>'
+                    f'<span style="color:#666; font-size:0.9rem;">/100 Balance Score</span></div>',
+                    unsafe_allow_html=True)
+
+        for note in analysis["notes"]:
+            st.caption(note)
+
+        # Body region breakdown
+        regions = analysis.get("body_regions", {})
+        if any(regions.values()):
+            r_cols = st.columns(3)
+            for i, (region, count) in enumerate(regions.items()):
+                with r_cols[i]:
+                    st.metric(region, f"{count} exercises")
+
+        # ─── Action Buttons ───
+        st.markdown("---")
+        col_start, col_save, col_pdf = st.columns(3)
         with col_start:
             if st.button("▶️ Start Workout", type="primary", use_container_width=True):
                 st.session_state.view = "player"
@@ -707,15 +1131,46 @@ Available exercises:
                 st.session_state.elapsed = 0
                 st.rerun()
         with col_save:
+            w_apparatus = meta.get("apparatus", "")
+            w_duration = meta.get("duration", 0)
             if st.button("💾 Save to History", use_container_width=True):
                 saved = save_workout(
                     user=user,
-                    theme=theme,
-                    duration=duration,
+                    theme=w_theme,
+                    duration=w_duration,
                     workout_json=workout_to_json(workout),
                 )
                 if saved:
                     st.toast("Workout saved! ✅")
+        with col_pdf:
+            pdf_bytes = generate_workout_pdf(
+                workout, user,
+                theme=w_theme,
+                duration=meta.get("duration", 0),
+                apparatus=meta.get("apparatus", ""),
+            )
+            st.download_button(
+                "📄 Export PDF",
+                data=pdf_bytes,
+                file_name=f"pilates_workout_{date.today().isoformat()}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+
+        # Favorite button
+        fav_col1, fav_col2 = st.columns([3, 1])
+        with fav_col2:
+            if st.button("⭐ Save as Favorite", use_container_width=True, key="fav_gen"):
+                fav_data = {
+                    "name": f"{w_theme} {meta.get('apparatus', '')} ({meta.get('duration', '')}min)",
+                    "date_saved": date.today().isoformat(),
+                    "meta": meta,
+                    "exercises": workout,
+                }
+                if "favorites" not in st.session_state:
+                    st.session_state.favorites = []
+                st.session_state.favorites.append(fav_data)
+                st.toast("⭐ Added to favorites!")
 
 
 # ─────────────────────────────────────────────
@@ -900,6 +1355,36 @@ elif st.session_state.view == "finish" and st.session_state.workout:
         st.session_state.view = "generator"
         st.rerun()
 
+    # Extra actions row
+    fin_col1, fin_col2 = st.columns(2)
+    meta = st.session_state.get("workout_meta", {})
+    with fin_col1:
+        pdf_bytes = generate_workout_pdf(
+            workout, user,
+            theme=meta.get("theme", ""),
+            duration=int(total_time),
+            apparatus=meta.get("apparatus", ""),
+        )
+        st.download_button(
+            "📄 Export PDF",
+            data=pdf_bytes,
+            file_name=f"pilates_workout_{date.today().isoformat()}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+    with fin_col2:
+        if st.button("⭐ Save as Favorite", use_container_width=True, key="fav_finish"):
+            fav_data = {
+                "name": f"{meta.get('theme', 'Workout')} {meta.get('apparatus', '')} ({int(total_time)}min)",
+                "date_saved": date.today().isoformat(),
+                "meta": meta,
+                "exercises": workout,
+            }
+            if "favorites" not in st.session_state:
+                st.session_state.favorites = []
+            st.session_state.favorites.append(fav_data)
+            st.toast("⭐ Added to favorites!")
+
 
 # ─────────────────────────────────────────────
 # View: History
@@ -978,6 +1463,165 @@ elif st.session_state.view == "history":
                         st.rerun()
                     except Exception:
                         st.error("Could not load this workout.")
+                try:
+                    pdf_exercises = json_to_workout(row["Full_JSON_Data"])
+                    if pdf_exercises:
+                        pdf_data = generate_workout_pdf(
+                            pdf_exercises, user,
+                            theme=row.get("Theme", ""),
+                            duration=int(row.get("Duration", 0)) if row.get("Duration") else 0,
+                        )
+                        st.download_button(
+                            "📄", data=pdf_data, key=f"pdf_{i}",
+                            file_name=f"workout_{row.get('Date', 'export')}.pdf",
+                            mime="application/pdf", help="Download PDF",
+                        )
+                except Exception:
+                    pass
+
+
+# ─────────────────────────────────────────────
+# View: Progress Dashboard
+# ─────────────────────────────────────────────
+
+elif st.session_state.view == "dashboard":
+    st.markdown(f"### 📊 Progress Dashboard — {user}")
+
+    history = load_history(user)
+    stats = calculate_progress_stats(history, user)
+
+    # ─── Top Metrics Row ───
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.metric("Total Workouts", stats["total_workouts"])
+    with m2:
+        hrs = stats["total_minutes"] // 60
+        mins = stats["total_minutes"] % 60
+        st.metric("Total Time", f"{hrs}h {mins}m" if hrs else f"{mins}m")
+    with m3:
+        avg_r = stats["avg_rating"]
+        st.metric("Avg Rating", f"{'⭐' * int(avg_r)} {avg_r}" if avg_r else "—")
+    with m4:
+        st.metric("Current Streak", f"🔥 {stats['current_streak']}")
+
+    # ─── Secondary Metrics ───
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        st.metric("This Week", stats["this_week"])
+    with s2:
+        st.metric("This Month", stats["this_month"])
+    with s3:
+        st.metric("Best Streak", f"{stats['best_streak']} sessions")
+
+    st.markdown("---")
+
+    # ─── Weekly Activity Chart ───
+    if stats["weekly_data"]:
+        st.markdown("#### 📈 Weekly Activity (Last 8 Weeks)")
+        chart_df = pd.DataFrame(stats["weekly_data"])
+        st.bar_chart(chart_df.set_index("week"), color="#6C63FF")
+
+    # ─── Apparatus & Theme Breakdown ───
+    breakdown_col1, breakdown_col2 = st.columns(2)
+
+    with breakdown_col1:
+        st.markdown("#### 🏋️ Apparatus Breakdown")
+        app_data = stats.get("apparatus_breakdown", {})
+        if app_data:
+            for apparatus_name, count in sorted(app_data.items(), key=lambda x: -x[1]):
+                pct = count / stats["total_workouts"] * 100 if stats["total_workouts"] else 0
+                st.markdown(f"**{apparatus_name}**: {count} sessions ({pct:.0f}%)")
+                st.progress(min(pct / 100, 1.0))
+        else:
+            st.caption("No data yet")
+
+    with breakdown_col2:
+        st.markdown("#### 🎯 Theme Breakdown")
+        theme_data = stats.get("theme_breakdown", {})
+        if theme_data:
+            for theme_name, count in sorted(theme_data.items(), key=lambda x: -x[1]):
+                pct = count / stats["total_workouts"] * 100 if stats["total_workouts"] else 0
+                st.markdown(f"**{theme_name}**: {count} sessions ({pct:.0f}%)")
+                st.progress(min(pct / 100, 1.0))
+        else:
+            st.caption("No data yet")
+
+    st.markdown("---")
+
+    # ─── Smart Recommendations ───
+    st.markdown("#### 🎯 Smart Recommendations")
+    recs = get_smart_recommendations(history, user)
+    for rec in recs:
+        st.markdown(f'<div style="background:white; padding:10px 14px; border-radius:10px; margin:6px 0; border-left:4px solid #6C63FF; font-size:0.95rem;">{rec}</div>', unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    # ─── Calendar View ───
+    st.markdown("#### 🗓️ Workout Calendar")
+    if not history.empty:
+        try:
+            cal_dates = pd.to_datetime(history[history["User"] == user]["Date"], errors="coerce").dropna()
+            unique_dates = sorted(set(cal_dates.dt.date))
+
+            if unique_dates:
+                # Show current month calendar
+                today = date.today()
+                month_start = today.replace(day=1)
+                if today.month == 12:
+                    month_end = today.replace(year=today.year + 1, month=1, day=1) - timedelta(days=1)
+                else:
+                    month_end = today.replace(month=today.month + 1, day=1) - timedelta(days=1)
+
+                # Build calendar grid
+                import calendar
+                cal = calendar.monthcalendar(today.year, today.month)
+                st.markdown(f"**{today.strftime('%B %Y')}**")
+
+                # Day headers
+                header_cols = st.columns(7)
+                for i, day_name in enumerate(["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]):
+                    with header_cols[i]:
+                        st.markdown(f"<div style='text-align:center; font-weight:700; color:#666; font-size:0.8rem;'>{day_name}</div>", unsafe_allow_html=True)
+
+                # Calendar weeks
+                for week in cal:
+                    week_cols = st.columns(7)
+                    for i, day in enumerate(week):
+                        with week_cols[i]:
+                            if day == 0:
+                                st.markdown("")
+                            else:
+                                d = date(today.year, today.month, day)
+                                if d in unique_dates:
+                                    st.markdown(f"<div style='text-align:center; background:#6C63FF; color:white; border-radius:50%; width:32px; height:32px; line-height:32px; margin:auto; font-weight:700;'>{day}</div>", unsafe_allow_html=True)
+                                elif d == today:
+                                    st.markdown(f"<div style='text-align:center; border:2px solid #6C63FF; border-radius:50%; width:32px; height:32px; line-height:32px; margin:auto;'>{day}</div>", unsafe_allow_html=True)
+                                else:
+                                    st.markdown(f"<div style='text-align:center; color:#aaa; width:32px; height:32px; line-height:32px; margin:auto;'>{day}</div>", unsafe_allow_html=True)
+        except Exception:
+            st.caption("Could not generate calendar.")
+    else:
+        st.caption("Complete some workouts to see your calendar!")
+
+    st.markdown("---")
+
+    # ─── Favorites ───
+    st.markdown("#### ⭐ Favorite Workouts")
+    favorites = st.session_state.get("favorites", [])
+    if favorites:
+        for fi, fav in enumerate(favorites):
+            fav_col1, fav_col2 = st.columns([5, 1])
+            with fav_col1:
+                st.markdown(f"**{fav.get('name', 'Unnamed')}** — saved {fav.get('date_saved', '')}")
+            with fav_col2:
+                if st.button("▶️", key=f"play_fav_{fi}", help="Load this workout"):
+                    st.session_state.workout = fav.get("exercises", [])
+                    st.session_state.workout_meta = fav.get("meta", {})
+                    st.session_state.view = "player"
+                    st.session_state.current_index = 0
+                    st.rerun()
+    else:
+        st.caption("No favorites yet — generate a workout and tap ⭐ to save it here!")
 
 
 # ─────────────────────────────────────────────
@@ -1117,3 +1761,213 @@ The user's name is {user}."""
         if st.button("🗑️ Clear conversation", key="clear_ai"):
             st.session_state.ai_messages = []
             st.rerun()
+
+
+# ─────────────────────────────────────────────
+# View: Help & Features
+# ─────────────────────────────────────────────
+
+elif st.session_state.view == "help":
+
+    st.markdown("### ❓ Help & Features Guide")
+    st.markdown("*Everything you can do in The Pilates Flow Studio*")
+    st.markdown("---")
+
+    # ─── Overview ───
+    st.markdown("""
+    <div style="background:white; padding:16px 20px; border-radius:12px; margin-bottom:16px; box-shadow:0 2px 8px rgba(0,0,0,0.06);">
+    <h4 style="margin-top:0;">👋 Welcome to The Pilates Flow Studio!</h4>
+    <p style="color:#555;">This app generates smart, balanced Pilates workouts tailored to your time, equipment,
+    energy level, and goals. It tracks your history, analyzes your progress, and even has an AI coach
+    you can ask questions any time.</p>
+    <p style="color:#555;"><strong>193 real Pilates exercises</strong> across Reformer, Mat, Chair, Cadillac, Ladder Barrel, and Spine Corrector — every exercise is from the recognized Pilates repertoire, nothing made up.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ─── Generate Workout ───
+    with st.expander("🎲 **GENERATE WORKOUT** — Build a custom session", expanded=True):
+        st.markdown("""
+**How to use:**
+1. Choose your **Duration** (30–90 minutes)
+2. Select your **Apparatus** — Reformer, Mat, Chair, Cadillac, Ladder Barrel, Spine Corrector, or Mixed
+3. Pick a **Theme** — Core, Flexibility, Lower Body, Upper Body, Full Body, or Balance
+4. Set your **Energy Level** — Gentle through Intense
+5. Choose **Difficulty** — Beginner, Intermediate, Advanced, or All Levels
+6. Tap **Generate Workout**
+
+**What happens next:**
+- The app builds a session using the **bell curve method**: Warmup (20%) → Foundation (30%) → Peak (30%) → Cooldown (20%)
+- Each exercise shows the name, springs, duration, category, and coaching cues
+- A **Balance Score** (out of 100) analyzes your workout for phase coverage, body region balance, and variety
+- You'll see specific suggestions if the workout is unbalanced
+
+**Customizing your workout:**
+- Tap **🔄** on any exercise to swap it out
+- Three swap options appear:
+  - **🎲 Random Swap** — finds a similar exercise in the same phase and category
+  - **🔍 Browse & Search** — filter by phase, apparatus, or type a keyword (e.g. "arm", "hip", "stretch")
+  - **🤖 AI Suggest** — describe what you want in plain English (e.g. "something easier for my back") and AI picks from the real database
+
+**Actions:**
+- **▶️ Start Workout** — enter the player view to step through exercises one by one
+- **💾 Save to History** — log the workout to your Google Sheets history
+- **📄 Export PDF** — download a beautifully formatted PDF to text or email to someone
+- **⭐ Save as Favorite** — bookmark this workout for quick replay later
+        """)
+
+    # ─── Player View ───
+    with st.expander("▶️ **PLAYER VIEW** — Step through your workout"):
+        st.markdown("""
+**How it works:**
+- Navigate through exercises one at a time with **← Prev** and **Next →** buttons
+- A progress bar shows where you are in the session
+- Each exercise shows full details: name, springs, phase, cues, and category
+
+**Timer:**
+- Hit **▶ Start** to begin an elapsed time counter
+- **⏸ Pause** to stop it, **↺ Reset** to clear it
+- The timer runs per exercise so you know how long you've spent
+
+**AI Instructor:**
+- A chat box appears on each exercise
+- Ask questions like "How should I set the springs?" or "What if this hurts my knee?"
+- The AI knows which exercise you're on and gives specific, contextual answers
+
+**Swap mid-workout:**
+- Tap **🔄 Swap This Exercise** to replace the current move without leaving the player
+
+**Finishing:**
+- Tap **✅ Finish** on the last exercise
+- Rate your session (1–5 stars) and add optional notes
+- Your rating and notes are saved to your history
+        """)
+
+    # ─── Dashboard ───
+    with st.expander("📊 **PROGRESS DASHBOARD** — Track your journey"):
+        st.markdown("""
+**Metrics at a glance:**
+- **Total Workouts** — lifetime count
+- **Total Time** — hours and minutes you've practiced
+- **Average Rating** — how your sessions have felt
+- **Current Streak** — consecutive sessions (allows up to 3 rest days between)
+- **This Week / This Month** — recent activity counts
+- **Best Streak** — your personal record
+
+**Charts & Breakdowns:**
+- **Weekly Activity** bar chart — last 8 weeks of session counts
+- **Apparatus Breakdown** — percentage of time on each piece of equipment
+- **Theme Breakdown** — which focus areas you've been training
+
+**Calendar View:**
+- Purple dots mark days you worked out this month
+- A circle marks today's date
+
+**Smart Recommendations:**
+- The app analyzes your history and suggests what to do next
+- Examples: "You haven't tried Cadillac", "It's been 8 days — time to move!", "Try a Flexibility session"
+
+**Favorites:**
+- Quick-replay any workout you've starred
+- Tap ▶️ next to a favorite to load it into the player
+        """)
+
+    # ─── History ───
+    with st.expander("📖 **WORKOUT HISTORY** — Review past sessions"):
+        st.markdown("""
+**What you see:**
+- Every saved workout, most recent first
+- Date, theme, duration, and rating for each session
+- Expandable details showing every exercise in the workout
+
+**Summary metrics at the top:**
+- Total sessions, average rating, average duration
+
+**Actions on each workout:**
+- **🔁** — Reload this workout into the player to repeat it
+- **📄** — Download a PDF of this past workout
+
+**Notes:** Your history is saved to Google Sheets and persists forever — it won't disappear when the app restarts.
+        """)
+
+    # ─── AI Coach ───
+    with st.expander("🤖 **AI PILATES COACH** — Your personal instructor"):
+        st.markdown("""
+**What it can do:**
+- **Exercise Lookup** — "Tell me about Short Spine Massage" → full breakdown with setup, springs, cues, modifications, muscles
+- **Workout Recommendations** — "I have 40 minutes and tight hips" → structured session suggestion
+- **Modifications** — "I have a bad knee, what should I avoid?" → safe alternatives
+- **Spring Guidance** — "What springs for Stomach Massage on an Allegro?"
+- **General Pilates Q&A** — breathing, form, philosophy, anatomy, anything
+
+**Quick-tap buttons:**
+- 🔍 Look up an exercise
+- 💡 Suggest a workout
+- 🩹 Modifications help
+- 📚 Explain springs/setup
+
+**Important:** The AI only recommends exercises from the app's real 193-exercise database. It will never make up fictional exercises.
+
+**Requires:** An Anthropic API key in your Streamlit secrets (`anthropic_api_key`).
+        """)
+
+    # ─── PDF Export ───
+    with st.expander("📄 **PDF EXPORT** — Share workouts"):
+        st.markdown("""
+**Where to find it:**
+- After generating a workout → **📄 Export PDF** button
+- After completing a workout → **📄 Export PDF** button
+- In Workout History → **📄** icon on each past session
+
+**What the PDF includes:**
+- Studio header with date and your name
+- All exercises organized by phase with color-coded headers
+- Springs, duration, category, and coaching cues for each exercise
+- Blank notes section at the bottom
+
+**Use it to:**
+- Text a workout to your partner or trainer
+- Email a session plan to yourself for the studio
+- Print it and bring it to your Pilates session
+        """)
+
+    # ─── User Profiles ───
+    with st.expander("👤 **USER PROFILES** — Keep histories separate"):
+        st.markdown("""
+**How it works:**
+- Open the sidebar (swipe right on mobile or click the arrow)
+- Select your name from the dropdown
+- All workout history, dashboard stats, and recommendations are per-user
+
+**Profiles available:** Alyssa, Ted (Test)
+
+Your profile selection is remembered during your session. Each person's workout history is completely separate in the Google Sheet.
+        """)
+
+    # ─── Tips ───
+    with st.expander("💡 **TIPS FOR BEST RESULTS**"):
+        st.markdown("""
+**For the best workouts:**
+- Start with **Moderate** energy if you're unsure — you can always swap in harder exercises
+- Use the **Balance Score** as a guide — aim for 80+ for a well-rounded session
+- The **bell curve** structure (Warmup → Foundation → Peak → Cooldown) is how professional studios program classes
+
+**On your phone:**
+- The app is optimized for iPhone — buttons are large and easy to tap
+- Add it to your home screen: in Safari, tap Share → Add to Home Screen → it'll feel like a native app
+- The sidebar collapses by default — all main navigation is in the top buttons
+
+**Building your practice:**
+- Aim for 2–3 sessions per week
+- Alternate between apparatus (Reformer one day, Mat the next)
+- Use different themes to ensure full-body coverage over the week
+- Check your Dashboard weekly to spot gaps in your training
+        """)
+
+    st.markdown("---")
+    st.markdown("""
+    <div style="text-align:center; color:#999; font-size:0.85rem; padding:8px;">
+        The Pilates Flow Studio v1.0<br>
+        193 exercises · 6 apparatus · AI-powered coaching<br>
+        Built with ❤️ for balanced movement
+    </div>
+    """, unsafe_allow_html=True)
