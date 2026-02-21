@@ -1112,7 +1112,29 @@ if st.session_state.view == "generator":
                         filtered_cues = []
                     energy_str = f" · Energy {energy}/5" if energy else ""
                     cue_lines = "".join(f'<div class="cue">▸ {c}</div>' for c in filtered_cues)
-                    card_html = f'<div class="exercise-card"><h4>{i+1}. {ex.get("name", "Exercise")}</h4><div class="meta">{apparatus}{springs} · {duration} min{energy_str}</div>{cue_lines}</div>'
+
+                    # YouTube tutorial link for this exercise
+                    import urllib.parse
+                    ex_name = ex.get("name", "Exercise")
+                    ex_apparatus = ex.get("apparatus", "")
+                    video_url = ex.get("video_url", "")
+                    if video_url:
+                        yt_link = (f'<a href="{video_url}" target="_blank" '
+                                   f'style="display:inline-block; margin-top:6px; padding:5px 12px; '
+                                   f'background:#FF0000; color:white !important; border-radius:6px; '
+                                   f'text-decoration:none; font-weight:600; font-size:0.8rem;">'
+                                   f'▶ Watch Tutorial</a>')
+                    else:
+                        search_q = urllib.parse.quote(f"pilates {ex_name} {ex_apparatus} tutorial")
+                        yt_link = (f'<a href="https://www.youtube.com/results?search_query={search_q}" '
+                                   f'target="_blank" style="display:inline-block; margin-top:6px; '
+                                   f'padding:5px 12px; background:#333; color:white !important; '
+                                   f'border-radius:6px; text-decoration:none; font-weight:600; '
+                                   f'font-size:0.8rem;">🔍 YouTube Tutorial</a>')
+
+                    card_html = (f'<div class="exercise-card"><h4>{i+1}. {ex_name}</h4>'
+                                 f'<div class="meta">{apparatus}{springs} · {duration} min{energy_str}</div>'
+                                 f'{cue_lines}{yt_link}</div>')
                     st.markdown(card_html, unsafe_allow_html=True)
                 with c2:
                     st.caption(ex.get("category", ex.get("reps", "")))
