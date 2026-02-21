@@ -1341,9 +1341,10 @@ elif st.session_state.view == "player" and st.session_state.workout:
                 st.rerun()
 
     # ─── Session Timer (always visible at top) ───
-    if st.session_state.timer_running and st.session_state.timer_start:
+    timer_start_val = st.session_state.get("timer_start", None)
+    if st.session_state.timer_running and timer_start_val is not None:
         elapsed_t = st.session_state.elapsed + (
-            time_module.time() - st.session_state.timer_start
+            time_module.time() - timer_start_val
         )
         # Auto-refresh every second while running
         if HAS_AUTOREFRESH:
@@ -1368,9 +1369,10 @@ elif st.session_state.view == "player" and st.session_state.workout:
                 st.rerun()
         else:
             if st.button("⏸ Pause", use_container_width=True, key="btn_timer_pause"):
-                st.session_state.elapsed += (
-                    time_module.time() - st.session_state.timer_start
-                )
+                if timer_start_val is not None:
+                    st.session_state.elapsed += (
+                        time_module.time() - timer_start_val
+                    )
                 st.session_state.timer_running = False
                 st.session_state.timer_start = None
                 st.rerun()
@@ -1946,9 +1948,69 @@ elif st.session_state.view == "dashboard":
 
 elif st.session_state.view == "ai_chat":
     st.markdown("### 🤖 AI Pilates Coach")
-    st.markdown("*Ask me anything about Pilates — exercises, recommendations, form tips, modifications, and more.*")
+    st.markdown("*Ask about exercises, get recommendations, or analyze your workout history.*")
 
-    # Quick action buttons
+    # Load history for AI context
+    ai_history_df = load_history(user)
+    history_summary = ""
+    if not ai_history_df.empty:
+        total_sessions = len(ai_history_df)
+        # Build exercise frequency map
+        exercise_freq = Counter()
+        category_freq = Counter()
+        apparatus_freq = Counter()
+        theme_freq = Counter()
+        all_exercises_taught = []
+        for _, row in ai_history_df.iterrows():
+            try:
+                exercises = json.loads(row.get("Full_JSON_Data", "[]"))
+                if isinstance(exercises, list):
+                    for ex in exercises:
+                        name = ex.get("name", "")
+                        if name:
+                            exercise_freq[name] += 1
+                            all_exercises_taught.append(name)
+                        cat = ex.get("category", "")
+                        if cat:
+                            category_freq[cat] += 1
+                        app = ex.get("apparatus", "")
+                        if app:
+                            apparatus_freq[app] += 1
+            except (json.JSONDecodeError, TypeError):
+                pass
+            t = row.get("Theme", "")
+            if t:
+                theme_freq[t] += 1
+
+        # Build readable summary
+        top_exercises = exercise_freq.most_common(15)
+        top_categories = category_freq.most_common(10)
+        least_categories = category_freq.most_common()[-5:] if len(category_freq) > 5 else []
+
+        history_summary = f"""
+WORKOUT HISTORY FOR {user} ({total_sessions} total sessions):
+
+Top 15 Most Used Exercises:
+{chr(10).join(f"  - {name}: {count} times" for name, count in top_exercises)}
+
+Most Focused Categories:
+{chr(10).join(f"  - {cat}: {count} times" for cat, count in top_categories)}
+
+Least Used Categories:
+{chr(10).join(f"  - {cat}: {count} times" for cat, count in least_categories)}
+
+Apparatus Usage:
+{chr(10).join(f"  - {app}: {count} exercises" for app, count in apparatus_freq.most_common())}
+
+Theme History:
+{chr(10).join(f"  - {theme}: {count} sessions" for theme, count in theme_freq.most_common())}
+
+Total unique exercises used: {len(exercise_freq)}
+Total exercises in database: {len(EXERCISE_DB)}
+Exercises NEVER used: {len(EXERCISE_DB) - len(exercise_freq)}
+"""
+
+    # Quick action buttons — two rows
     st.markdown("**Quick questions:**")
     qa_col1, qa_col2 = st.columns(2)
     with qa_col1:
@@ -1978,6 +2040,37 @@ elif st.session_state.view == "ai_chat":
             })
             st.rerun()
 
+    # History-specific quick actions
+    if not ai_history_df.empty:
+        st.markdown("**Analyze my history:**")
+        ha_col1, ha_col2 = st.columns(2)
+        with ha_col1:
+            if st.button("📊 What do I teach most?", use_container_width=True, key="qa_most"):
+                st.session_state.ai_messages.append({
+                    "role": "user",
+                    "content": "Look at my workout history — what exercises and muscle groups am I teaching the most? What am I over-indexing on?"
+                })
+                st.rerun()
+            if st.button("🕳️ What am I missing?", use_container_width=True, key="qa_gaps"):
+                st.session_state.ai_messages.append({
+                    "role": "user",
+                    "content": "Analyze my history — what categories, muscle groups, or movement patterns am I neglecting? What gaps should I fill?"
+                })
+                st.rerun()
+        with ha_col2:
+            if st.button("⚖️ Am I balanced?", use_container_width=True, key="qa_balance"):
+                st.session_state.ai_messages.append({
+                    "role": "user",
+                    "content": "Give me an honest assessment of my programming balance. Am I hitting all muscle groups and movement patterns evenly across my history?"
+                })
+                st.rerun()
+            if st.button("🎯 What should I teach next?", use_container_width=True, key="qa_next"):
+                st.session_state.ai_messages.append({
+                    "role": "user",
+                    "content": "Based on what I've been teaching recently, what should my next class focus on to keep my programming well-rounded?"
+                })
+                st.rerun()
+
     st.markdown("---")
 
     # Build exercise knowledge for the AI
@@ -1987,10 +2080,10 @@ elif st.session_state.view == "ai_chat":
         exercise_names.append(ex.name)
         exercise_details.append(
             f"- {ex.name} ({ex.apparatus}): Category={ex.category}, Phase={ex.phase}, "
-            f"Springs={ex.default_springs}, Energy={ex.energy}/5, "
-            f"Cues: {'; '.join(ex.cues[:2])}"
+            f"Springs={ex.default_springs}, Energy={ex.energy}/5, Level={ex.level}, "
+            f"Themes={','.join(ex.themes)}, Cues: {'; '.join(ex.cues[:2])}"
         )
-    exercise_knowledge = "\n".join(exercise_details)  # Include all exercises
+    exercise_knowledge = "\n".join(exercise_details)
 
     # Chat display
     for msg in st.session_state.ai_messages:
@@ -2015,38 +2108,36 @@ elif st.session_state.view == "ai_chat":
             else:
                 client = anthropic.Anthropic(api_key=api_key)
 
-                system_prompt = f"""You are a warm, expert Pilates instructor and coach named Coach Flow.
-You have deep knowledge of all Pilates apparatus (Reformer, Mat, Chair/Wunda Chair, Cadillac/Trapeze Table).
+                system_prompt = f"""You are a warm, expert Pilates instructor and programming consultant named Coach Flow.
+You have deep knowledge of all Pilates apparatus (Reformer, Mat, Chair/Wunda Chair, Cadillac/Trapeze Table, Ladder Barrel, Spine Corrector).
 
 CRITICAL RULE: When recommending or discussing specific exercises, you must ONLY reference exercises 
-from the studio database listed below. NEVER invent or make up exercise names. If someone asks about 
-an exercise not in the database, you can explain it generally but be clear it's not in our current studio library.
+from the studio database listed below. NEVER invent or make up exercise names.
 
 YOUR CAPABILITIES:
 1. EXERCISE LOOKUP: When asked about a specific exercise, explain it in detail — setup, springs, 
-   movement, cues, common mistakes, modifications for beginners/injuries, and what muscles it targets.
-   Always check if it exists in our database first.
-2. WORKOUT RECOMMENDATIONS: When asked for workout ideas, ONLY use exercises from the database below.
-   Ask about their goals, time available, apparatus, energy level, and any limitations. Then suggest 
-   a structured session using the bell curve: Warmup → Foundation → Peak → Cooldown.
-3. GENERAL PILATES KNOWLEDGE: Answer questions about form, breathing, spring settings, 
-   equipment setup, anatomy, modifications for injuries/conditions (back pain, knee issues, 
-   pregnancy, osteoporosis, etc.), and Pilates philosophy.
+   movement, cues, common mistakes, modifications, and target muscles.
+2. WORKOUT RECOMMENDATIONS: Use ONLY exercises from the database. Suggest structured sessions 
+   using the bell curve: Warmup -> Foundation -> Peak -> Cooldown.
+3. HISTORY ANALYSIS: You have access to {user}'s complete workout history below. When asked about 
+   patterns, gaps, frequency, muscle group focus, or programming balance — analyze this data and 
+   give specific, actionable insights. Reference specific exercises and numbers.
+4. PROGRAMMING ADVICE: Help them build better class plans. Identify what they're over-doing, 
+   what they're missing, and suggest exercises they've never tried.
+5. GENERAL PILATES KNOWLEDGE: Form, breathing, springs, anatomy, modifications, philosophy.
+
+{history_summary if history_summary else "No workout history available yet for this user."}
 
 OUR COMPLETE STUDIO EXERCISE DATABASE ({len(EXERCISE_DB)} exercises):
 {exercise_knowledge}
 
-When recommending workouts, use the exact exercise names from this list.
-When someone asks "what exercises do you have for X", search this list and cite the matches.
-
 STYLE:
-- Be warm, encouraging, and professional
-- Use clear, concise language
-- When describing exercises, use vivid cues like a real instructor would
-- For modifications, always prioritize safety
-- Use bullet points for exercise breakdowns
-- If recommending a workout, format it clearly with phases
-- Keep responses focused — 3-6 sentences for simple questions, longer for workout plans
+- Be direct and specific — use actual numbers from their history
+- When they ask "what am I doing most", give exact counts and percentages
+- When they ask about gaps, name specific exercises they should try
+- Be warm but honest — a good coach tells you what you need to hear
+- Format clearly with bullet points for data, prose for advice
+- Keep responses focused — concise for simple questions, thorough for analysis
 
 The user's name is {user}."""
 
