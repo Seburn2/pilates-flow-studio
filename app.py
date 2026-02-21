@@ -550,7 +550,7 @@ def generate_workout_pdf(workout: list[dict], user: str, theme: str = "",
     for _ in range(4):
         pdf.cell(0, 8, "_" * 95, new_x="LMARGIN", new_y="NEXT")
 
-    return pdf.output()
+    return bytes(pdf.output())
 
 
 # ─────────────────────────────────────────────
@@ -1464,30 +1464,47 @@ elif st.session_state.view == "history":
                 with st.expander(f"📋 {row['Date']} — {row['Theme']} ({row['Duration']} min)"):
                     try:
                         exercises = json_to_workout(row["Full_JSON_Data"])
+                        current_phase = ""
                         for j, ex in enumerate(exercises):
                             name = ex.get('name', 'Unknown')
                             apparatus = ex.get('apparatus', '')
-                            phase = ex.get('phase_label', ex.get('phase', ''))
+                            phase = ex.get('phase_label', ex.get('phase', '')).capitalize() if ex.get('phase_label') or ex.get('phase') else ''
                             duration = ex.get('duration_min', '')
-                            springs = ex.get('springs', '')
+                            springs = ex.get('default_springs', ex.get('springs', ''))
                             reps = ex.get('reps', '')
+                            cues = ex.get('cues', [])
+                            category = ex.get('category', '')
 
-                            # Build display line
-                            parts = [f"**{j+1}. {name}**"]
+                            # Phase header
+                            if phase and phase != current_phase:
+                                current_phase = phase
+                                phase_colors = {"Warmup": "#FF6B35", "Foundation": "#E6394A", "Peak": "#9B5DE5", "Cooldown": "#00B4D8"}
+                                p_color = phase_colors.get(phase, "#666")
+                                st.markdown(f'<div style="background:{p_color}; color:white; padding:4px 10px; border-radius:6px; font-weight:700; font-size:0.8rem; margin:8px 0 4px 0; display:inline-block;">{phase.upper()}</div>', unsafe_allow_html=True)
+
+                            # Exercise line
+                            line = f"**{j+1}. {name}**"
                             if apparatus:
-                                parts[0] += f" ({apparatus})"
+                                line += f" ({apparatus})"
                             details = []
-                            if phase:
-                                details.append(phase)
                             if duration:
                                 details.append(f"{duration} min")
-                            if springs:
+                            if springs and springs != "N/A":
                                 details.append(f"Springs: {springs}")
+                            if category:
+                                details.append(category)
                             if reps:
                                 details.append(f"{reps}")
                             if details:
-                                parts.append(" · ".join(details))
-                            st.markdown(" — ".join(parts))
+                                line += f" — {' · '.join(details)}"
+                            st.markdown(line)
+
+                            # Show cues
+                            if isinstance(cues, list) and any(c for c in cues if c):
+                                for cue in cues[:3]:
+                                    if cue:
+                                        st.caption(f"  ▸ {cue}")
+
                     except Exception:
                         st.caption("Could not parse workout data.")
                     if row.get("Notes"):
