@@ -27,6 +27,7 @@ class Exercise:
     cues: list[str] = field(default_factory=list)
     themes: list[str] = field(default_factory=list)  # "Core", "Flexibility", etc.
     image: str = ""         # filename in /assets
+    video_url: str = ""     # YouTube tutorial link (optional)
     level: str = "all"      # "beginner", "intermediate", "advanced", "all"
 
     def to_dict(self):
