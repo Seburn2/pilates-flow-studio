@@ -347,7 +347,7 @@ def get_sheet():
 
 
 def ensure_worksheets(spreadsheet):
-    """Make sure both required tabs exist with headers."""
+    """Make sure all required tabs exist with headers."""
     existing = [ws.title for ws in spreadsheet.worksheets()]
 
     if "workouts_log" not in existing:
@@ -356,6 +356,10 @@ def ensure_worksheets(spreadsheet):
     if "exercise_library" not in existing:
         ws = spreadsheet.add_worksheet(title="exercise_library", rows=500, cols=4)
         ws.append_row(["Slug", "Name", "Default_Springs", "Cues"])
+    if "class_prep" not in existing:
+        ws = spreadsheet.add_worksheet(title="class_prep", rows=500, cols=9)
+        ws.append_row(["ID", "User", "Class_Name", "Date_Time", "Apparatus", "Theme",
+                        "Duration", "Full_JSON_Data", "Status"])
 
 
 def save_workout(user: str, theme: str, duration: int, workout_json: str,
@@ -394,6 +398,76 @@ def load_history(user: str) -> pd.DataFrame:
     except Exception as e:
         st.warning(f"Could not load history: {e}")
         return pd.DataFrame()
+
+
+# ─────────────────────────────────────────────
+# Class Prep (Google Sheets persistence)
+# ─────────────────────────────────────────────
+
+def save_class_prep(user: str, class_name: str, date_time: str, apparatus: str,
+                     theme: str, duration: int, workout_json: str) -> bool:
+    """Save a prepped class to Google Sheets."""
+    spreadsheet = get_sheet()
+    if spreadsheet is None:
+        st.warning("Could not save — Google Sheets not connected.")
+        return False
+    try:
+        ensure_worksheets(spreadsheet)
+        ws = spreadsheet.worksheet("class_prep")
+        class_id = datetime.now().strftime("%Y%m%d%H%M%S")
+        ws.append_row([
+            class_id, user, class_name, date_time, apparatus,
+            theme, duration, workout_json, "upcoming",
+        ])
+        return True
+    except Exception as e:
+        st.warning(f"Save failed: {e}")
+        return False
+
+
+def load_class_preps(user: str) -> pd.DataFrame:
+    """Load all prepped classes for a user."""
+    spreadsheet = get_sheet()
+    if spreadsheet is None:
+        return pd.DataFrame()
+    try:
+        ensure_worksheets(spreadsheet)
+        ws = spreadsheet.worksheet("class_prep")
+        records = ws.get_all_records()
+        df = pd.DataFrame(records)
+        if df.empty:
+            return df
+        user_df = df[df["User"] == user]
+        # Sort: upcoming first, then by date_time, then completed at bottom
+        if not user_df.empty:
+            user_df = user_df.copy()
+            user_df["_sort"] = user_df["Status"].map({"upcoming": 0, "completed": 1}).fillna(2)
+            user_df = user_df.sort_values(["_sort", "Date_Time"], ascending=[True, True])
+            user_df = user_df.drop(columns=["_sort"])
+        return user_df
+    except Exception as e:
+        st.warning(f"Could not load classes: {e}")
+        return pd.DataFrame()
+
+
+def update_class_status(class_id: str, new_status: str) -> bool:
+    """Mark a prepped class as completed or delete it."""
+    spreadsheet = get_sheet()
+    if spreadsheet is None:
+        return False
+    try:
+        ws = spreadsheet.worksheet("class_prep")
+        cell = ws.find(str(class_id), in_column=1)
+        if cell:
+            if new_status == "delete":
+                ws.delete_rows(cell.row)
+            else:
+                ws.update_cell(cell.row, 9, new_status)  # Column 9 = Status
+            return True
+        return False
+    except Exception as e:
+        st.warning(f"Update failed: {e}")
+        return False
 
 
 # ─────────────────────────────────────────────
@@ -802,7 +876,7 @@ DEFAULTS = {
     "timer_running": False,
     "timer_start": None,
     "elapsed": 0,
-    "view": "generator",       # "generator", "player", "history", "ai_chat", "dashboard"
+    "view": "generator",       # "generator", "player", "history", "ai_chat", "dashboard", "classes"
     "chat_messages": [],
     "workout_rated": False,
     "ai_messages": [],         # General AI chat history
@@ -832,6 +906,8 @@ with st.sidebar:
     st.caption("Pilates Flow Studio v1.0")
     st.caption(f"Logged in as: **{user}**")
     st.markdown("---")
+    if st.button("📊 Progress Dashboard", use_container_width=True, key="nav_dash_sb"):
+        st.session_state.view = "dashboard"
     if st.button("❓ Help & Features", use_container_width=True, key="nav_help"):
         st.session_state.view = "help"
         # no rerun needed, falls through
@@ -860,9 +936,9 @@ with nav_col1:
         st.session_state.workout = None
         st.rerun()
 with nav_col2:
-    if st.button("📊 DASHBOARD", use_container_width=True, type="secondary",
-                  key="nav_dash"):
-        st.session_state.view = "dashboard"
+    if st.button("📋 MY CLASSES", use_container_width=True, type="secondary",
+                  key="nav_classes"):
+        st.session_state.view = "classes"
         st.rerun()
 with nav_col3:
     if st.button("📖 HISTORY", use_container_width=True, type="secondary",
@@ -880,6 +956,7 @@ active_labels = {
     "generator": ("● Generate Workout", "#6C63FF"),
     "player": ("● Generate Workout", "#6C63FF"),
     "finish": ("● Generate Workout", "#6C63FF"),
+    "classes": ("● My Classes", "#10B981"),
     "dashboard": ("● Progress Dashboard", "#10B981"),
     "history": ("● Workout History", "#00B4D8"),
     "ai_chat": ("● AI Pilates Coach", "#FF6B35"),
@@ -1191,17 +1268,46 @@ Available exercises:
                 st.button("📄 PDF unavailable", disabled=True, use_container_width=True,
                            help=f"PDF error: {pdf_err}")
         with col_fav:
-            if st.button("⭐ Save as Favorite", use_container_width=True, key="fav_gen"):
-                fav_data = {
-                    "name": f"{w_theme} {meta.get('apparatus', '')} ({meta.get('duration', '')}min)",
-                    "date_saved": date.today().isoformat(),
-                    "meta": meta,
-                    "exercises": workout,
-                }
-                if "favorites" not in st.session_state:
-                    st.session_state.favorites = []
-                st.session_state.favorites.append(fav_data)
-                st.toast("⭐ Added to favorites!")
+            if st.button("📋 Save to Class Prep", use_container_width=True, key="save_class_gen"):
+                st.session_state["show_class_save"] = True
+
+        # Class Prep save form
+        if st.session_state.get("show_class_save", False):
+            with st.container():
+                st.markdown("##### 📋 Save to Class Prep")
+                cp_name = st.text_input("Class Name", value=f"{meta.get('apparatus', 'Reformer')} {w_theme}",
+                                        placeholder="e.g. Tuesday 9am Reformer Flow", key="cp_name")
+                cp_col1, cp_col2 = st.columns(2)
+                with cp_col1:
+                    cp_date = st.date_input("Date (optional)", value=None, key="cp_date")
+                with cp_col2:
+                    cp_time = st.time_input("Time (optional)", value=None, key="cp_time")
+
+                cp_save_col, cp_cancel_col = st.columns(2)
+                with cp_save_col:
+                    if st.button("✅ Save Class", type="primary", use_container_width=True, key="cp_confirm"):
+                        dt_str = ""
+                        if cp_date:
+                            dt_str = cp_date.isoformat()
+                            if cp_time:
+                                dt_str += f" {cp_time.strftime('%H:%M')}"
+                        saved = save_class_prep(
+                            user=user,
+                            class_name=cp_name,
+                            date_time=dt_str,
+                            apparatus=meta.get("apparatus", ""),
+                            theme=w_theme,
+                            duration=meta.get("duration", 0),
+                            workout_json=workout_to_json(workout),
+                        )
+                        if saved:
+                            st.toast(f"📋 Saved: {cp_name}")
+                            st.session_state["show_class_save"] = False
+                            st.rerun()
+                with cp_cancel_col:
+                    if st.button("Cancel", use_container_width=True, key="cp_cancel"):
+                        st.session_state["show_class_save"] = False
+                        st.rerun()
 
 
 # ─────────────────────────────────────────────
@@ -1256,12 +1362,12 @@ elif st.session_state.view == "player" and st.session_state.workout:
         )
     with timer_c2:
         if not st.session_state.timer_running:
-            if st.button("▶ Start", use_container_width=True, key="timer_start"):
+            if st.button("▶ Start", use_container_width=True, key="btn_timer_start"):
                 st.session_state.timer_running = True
                 st.session_state.timer_start = time_module.time()
                 st.rerun()
         else:
-            if st.button("⏸ Pause", use_container_width=True, key="timer_pause"):
+            if st.button("⏸ Pause", use_container_width=True, key="btn_timer_pause"):
                 st.session_state.elapsed += (
                     time_module.time() - st.session_state.timer_start
                 )
@@ -1269,7 +1375,7 @@ elif st.session_state.view == "player" and st.session_state.workout:
                 st.session_state.timer_start = None
                 st.rerun()
     with timer_c3:
-        if st.button("↺ Reset", use_container_width=True, key="timer_reset"):
+        if st.button("↺ Reset", use_container_width=True, key="btn_timer_reset"):
             st.session_state.elapsed = 0
             st.session_state.timer_running = False
             st.session_state.timer_start = None
@@ -1411,17 +1517,168 @@ elif st.session_state.view == "finish" and st.session_state.workout:
             st.button("📄 PDF unavailable", disabled=True, use_container_width=True,
                        help=f"PDF error: {pdf_err}")
     with fin_col2:
-        if st.button("⭐ Save as Favorite", use_container_width=True, key="fav_finish"):
-            fav_data = {
-                "name": f"{meta.get('theme', 'Workout')} {meta.get('apparatus', '')} ({int(total_time)}min)",
-                "date_saved": date.today().isoformat(),
-                "meta": meta,
-                "exercises": workout,
-            }
-            if "favorites" not in st.session_state:
-                st.session_state.favorites = []
-            st.session_state.favorites.append(fav_data)
-            st.toast("⭐ Added to favorites!")
+        if st.button("📋 Save to Class Prep", use_container_width=True, key="cp_finish"):
+            cp_name = f"{meta.get('theme', 'Class')} {meta.get('apparatus', '')} ({int(total_time)}min)"
+            saved = save_class_prep(
+                user=user,
+                class_name=cp_name,
+                date_time="",
+                apparatus=meta.get("apparatus", ""),
+                theme=meta.get("theme", ""),
+                duration=int(total_time),
+                workout_json=workout_to_json(workout),
+            )
+            if saved:
+                st.toast(f"📋 Saved to My Classes: {cp_name}")
+
+
+# ─────────────────────────────────────────────
+# View: My Classes (Class Prep)
+# ─────────────────────────────────────────────
+
+elif st.session_state.view == "classes":
+    st.markdown(f"### 📋 My Classes — {user}")
+    st.caption("Prep classes at home, pull them up at the studio. Saved to Google Sheets so they're always available.")
+
+    preps = load_class_preps(user)
+
+    if preps.empty:
+        st.info("No classes prepped yet. Generate a workout and tap **📋 Save to Class Prep** to add your first class!")
+    else:
+        # Split into upcoming and completed
+        upcoming = preps[preps["Status"] == "upcoming"] if "Status" in preps.columns else preps
+        completed = preps[preps["Status"] == "completed"] if "Status" in preps.columns else pd.DataFrame()
+
+        # ─── Upcoming Classes ───
+        if not upcoming.empty:
+            st.markdown(f"#### 📅 Upcoming ({len(upcoming)})")
+
+            for idx, row in upcoming.iterrows():
+                class_name = row.get("Class_Name", "Unnamed Class")
+                dt = row.get("Date_Time", "")
+                apparatus = row.get("Apparatus", "")
+                theme = row.get("Theme", "")
+                duration = row.get("Duration", "")
+                class_id = row.get("ID", "")
+
+                # Header with date/time badge
+                header = f"**{class_name}**"
+                meta_parts = []
+                if dt:
+                    meta_parts.append(f"📅 {dt}")
+                if apparatus:
+                    meta_parts.append(apparatus)
+                if theme:
+                    meta_parts.append(theme)
+                if duration:
+                    meta_parts.append(f"{duration} min")
+
+                with st.container():
+                    st.markdown(f'<div style="background:white; padding:14px 18px; border-radius:12px; margin:8px 0; border-left:5px solid #10B981; box-shadow:0 2px 8px rgba(0,0,0,0.06);">'
+                                f'<div style="font-size:1.1rem; font-weight:700; margin-bottom:4px;">{class_name}</div>'
+                                f'<div style="color:#666; font-size:0.9rem;">{"  ·  ".join(meta_parts)}</div>'
+                                f'</div>', unsafe_allow_html=True)
+
+                    btn_c1, btn_c2, btn_c3, btn_c4 = st.columns(4)
+
+                    with btn_c1:
+                        if st.button("▶️ Teach", key=f"teach_{class_id}", use_container_width=True,
+                                      type="primary"):
+                            try:
+                                exercises = json_to_workout(row["Full_JSON_Data"])
+                                st.session_state.workout = exercises
+                                st.session_state.workout_meta = {
+                                    "theme": theme, "apparatus": apparatus,
+                                    "duration": int(duration) if duration else 0,
+                                    "class_id": class_id, "class_name": class_name,
+                                }
+                                st.session_state.view = "player"
+                                st.session_state.current_index = 0
+                                st.session_state.timer_running = False
+                                st.session_state.elapsed = 0
+                                st.rerun()
+                            except Exception:
+                                st.error("Could not load this class.")
+
+                    with btn_c2:
+                        try:
+                            pdf_exercises = json_to_workout(row["Full_JSON_Data"])
+                            if pdf_exercises:
+                                pdf_data = generate_workout_pdf(
+                                    pdf_exercises, user,
+                                    theme=theme,
+                                    duration=int(duration) if duration else 0,
+                                    apparatus=apparatus,
+                                )
+                                st.download_button(
+                                    "📄 PDF", data=pdf_data, key=f"classpdf_{class_id}",
+                                    file_name=f"class_{class_name.replace(' ', '_')}.pdf",
+                                    mime="application/pdf",
+                                    use_container_width=True,
+                                )
+                        except Exception:
+                            pass
+
+                    with btn_c3:
+                        if st.button("✅ Done", key=f"done_{class_id}", use_container_width=True):
+                            if update_class_status(str(class_id), "completed"):
+                                # Also save to workout history
+                                try:
+                                    save_workout(
+                                        user=user, theme=theme,
+                                        duration=int(duration) if duration else 0,
+                                        workout_json=row["Full_JSON_Data"],
+                                    )
+                                except Exception:
+                                    pass
+                                st.toast(f"✅ {class_name} marked complete & saved to history!")
+                                st.rerun()
+
+                    with btn_c4:
+                        if st.button("🗑️", key=f"del_{class_id}", use_container_width=True,
+                                      help="Delete this class"):
+                            if update_class_status(str(class_id), "delete"):
+                                st.toast(f"Deleted: {class_name}")
+                                st.rerun()
+
+                    # Expandable exercise list
+                    with st.expander("View exercises", expanded=False):
+                        try:
+                            exercises = json_to_workout(row["Full_JSON_Data"])
+                            current_phase = ""
+                            for j, ex in enumerate(exercises):
+                                phase = ex.get('phase_label', ex.get('phase', '')).capitalize() if ex.get('phase_label') or ex.get('phase') else ''
+                                if phase and phase != current_phase:
+                                    current_phase = phase
+                                    phase_colors = {"Warmup": "#FF6B35", "Foundation": "#E6394A", "Peak": "#9B5DE5", "Cooldown": "#00B4D8"}
+                                    p_color = phase_colors.get(phase, "#666")
+                                    st.markdown(f'<div style="background:{p_color}; color:white; padding:3px 8px; border-radius:5px; font-weight:700; font-size:0.75rem; margin:6px 0 3px 0; display:inline-block;">{phase.upper()}</div>', unsafe_allow_html=True)
+                                name = ex.get('name', 'Unknown')
+                                springs = ex.get('default_springs', ex.get('springs', ''))
+                                line = f"**{j+1}. {name}**"
+                                if springs and springs != "N/A":
+                                    line += f" — {springs}"
+                                st.markdown(line)
+                                cues = ex.get('cues', [])
+                                if isinstance(cues, list):
+                                    for cue in cues[:2]:
+                                        if cue:
+                                            st.caption(f"  ▸ {cue}")
+                        except Exception:
+                            st.caption("Could not parse exercises.")
+
+        # ─── Completed Classes ───
+        if not completed.empty:
+            st.markdown("---")
+            with st.expander(f"✅ Completed ({len(completed)})", expanded=False):
+                for idx, row in completed.iterrows():
+                    class_name = row.get("Class_Name", "Unnamed")
+                    dt = row.get("Date_Time", "")
+                    class_id = row.get("ID", "")
+                    st.markdown(f"~~{class_name}~~ — {dt}")
+                    if st.button("🗑️ Remove", key=f"del_done_{class_id}"):
+                        update_class_status(str(class_id), "delete")
+                        st.rerun()
 
 
 # ─────────────────────────────────────────────
@@ -1658,23 +1915,29 @@ elif st.session_state.view == "dashboard":
 
     st.markdown("---")
 
-    # ─── Favorites ───
-    st.markdown("#### ⭐ Favorite Workouts")
-    favorites = st.session_state.get("favorites", [])
-    if favorites:
-        for fi, fav in enumerate(favorites):
-            fav_col1, fav_col2 = st.columns([5, 1])
-            with fav_col1:
-                st.markdown(f"**{fav.get('name', 'Unnamed')}** — saved {fav.get('date_saved', '')}")
-            with fav_col2:
-                if st.button("▶️", key=f"play_fav_{fi}", help="Load this workout"):
-                    st.session_state.workout = fav.get("exercises", [])
-                    st.session_state.workout_meta = fav.get("meta", {})
-                    st.session_state.view = "player"
-                    st.session_state.current_index = 0
-                    st.rerun()
+    # ─── Upcoming Classes Quick View ───
+    st.markdown("#### 📋 Upcoming Classes")
+    preps = load_class_preps(user)
+    if not preps.empty:
+        upcoming = preps[preps["Status"] == "upcoming"] if "Status" in preps.columns else preps
+        if not upcoming.empty:
+            for _, row in upcoming.head(5).iterrows():
+                dt = row.get("Date_Time", "")
+                dt_str = f" — {dt}" if dt else ""
+                st.markdown(f'<div style="background:white; padding:8px 14px; border-radius:8px; margin:4px 0; border-left:4px solid #10B981; font-size:0.9rem;">'
+                            f'<strong>{row.get("Class_Name", "Unnamed")}</strong>{dt_str}'
+                            f' · {row.get("Apparatus", "")} · {row.get("Duration", "")} min</div>',
+                            unsafe_allow_html=True)
+            if len(upcoming) > 5:
+                st.caption(f"+ {len(upcoming) - 5} more...")
+        else:
+            st.caption("All classes completed!")
     else:
-        st.caption("No favorites yet — generate a workout and tap ⭐ to save it here!")
+        st.caption("No classes prepped yet — use Generate → 📋 Save to Class Prep")
+
+    if st.button("→ Go to My Classes", use_container_width=True, key="dash_to_classes"):
+        st.session_state.view = "classes"
+        st.rerun()
 
 
 # ─────────────────────────────────────────────
@@ -1982,6 +2245,28 @@ elif st.session_state.view == "help":
 - Text a workout to your partner or trainer
 - Email a session plan to yourself for the studio
 - Print it and bring it to your Pilates session
+        """)
+
+    # ─── Class Prep ───
+    with st.expander("📋 **MY CLASSES** — Prep & teach"):
+        st.markdown("""
+**The workflow:**
+1. **At home:** Generate workouts for each class you teach tomorrow
+2. **Save each one** to Class Prep with a name (e.g. "Tuesday 9am Reformer Flow")
+3. **Optionally** add a date and time — or just leave it as a named class
+4. **At the studio:** Open the app → My Classes → tap **▶️ Teach** to pull up the workout
+5. **After class:** Tap **✅ Done** — it automatically saves to your History and moves to Completed
+
+**Features:**
+- **▶️ Teach** — opens the workout in player mode with timer, cues, and AI instructor
+- **📄 PDF** — download a PDF to print or text to a co-instructor
+- **✅ Done** — marks complete AND saves to your workout history
+- **🗑️** — delete a class you no longer need
+- **View exercises** — expand to see the full workout with phases and cues
+
+**Everything persists** in Google Sheets — prep on your laptop, teach from your phone. No data lost between sessions.
+
+**Tip:** Prep all your classes the night before. You'll have a clean queue ready to go when you walk into the studio.
         """)
 
     # ─── User Profiles ───
