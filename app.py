@@ -10,6 +10,7 @@ import pandas as pd
 import gspread
 import json
 import io
+import base64
 import time as time_module
 from datetime import datetime, date, timedelta
 from collections import Counter
@@ -619,6 +620,22 @@ def generate_workout_pdf(workout: list[dict], user: str, theme: str = "",
         pdf.cell(0, 8, "_" * 95, new_x="LMARGIN", new_y="NEXT")
 
     return bytes(pdf.output())
+
+
+def pdf_download_link(pdf_bytes: bytes, filename: str, label: str = "📄 Download PDF",
+                       key: str = "pdf"):
+    """Render a mobile-friendly PDF download link that opens in a new tab.
+    Fixes iOS Safari issue where st.download_button opens inline with no back button."""
+    b64 = base64.b64encode(pdf_bytes).decode()
+    st.markdown(
+        f'<a href="data:application/pdf;base64,{b64}" download="{filename}" target="_blank" '
+        f'style="display:inline-block; width:100%; text-align:center; padding:12px 16px; '
+        f'background:linear-gradient(135deg, #10B981 0%, #059669 100%); color:white !important; '
+        f'font-weight:700; font-size:1rem; border-radius:10px; text-decoration:none; '
+        f'min-height:48px; line-height:24px; box-sizing:border-box;">'
+        f'{label}</a>',
+        unsafe_allow_html=True,
+    )
 
 
 # ─────────────────────────────────────────────
@@ -1252,12 +1269,10 @@ Available exercises:
                     duration=meta.get("duration", 0),
                     apparatus=meta.get("apparatus", ""),
                 )
-                st.download_button(
+                pdf_download_link(
+                    pdf_bytes,
+                    f"pilates_workout_{date.today().isoformat()}.pdf",
                     "📄 SHARE / EXPORT PDF",
-                    data=pdf_bytes,
-                    file_name=f"pilates_workout_{date.today().isoformat()}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True,
                 )
             except Exception as pdf_err:
                 st.button("📄 PDF unavailable", disabled=True, use_container_width=True,
@@ -1549,12 +1564,10 @@ elif st.session_state.view == "finish" and st.session_state.workout:
                 duration=int(total_time),
                 apparatus=meta.get("apparatus", ""),
             )
-            st.download_button(
+            pdf_download_link(
+                pdf_bytes,
+                f"pilates_workout_{date.today().isoformat()}.pdf",
                 "📄 SHARE / EXPORT PDF",
-                data=pdf_bytes,
-                file_name=f"pilates_workout_{date.today().isoformat()}.pdf",
-                mime="application/pdf",
-                use_container_width=True,
             )
         except Exception as pdf_err:
             st.button("📄 PDF unavailable", disabled=True, use_container_width=True,
@@ -1653,11 +1666,10 @@ elif st.session_state.view == "classes":
                                     duration=int(duration) if duration else 0,
                                     apparatus=apparatus,
                                 )
-                                st.download_button(
-                                    "📄 PDF", data=pdf_data, key=f"classpdf_{class_id}",
-                                    file_name=f"class_{class_name.replace(' ', '_')}.pdf",
-                                    mime="application/pdf",
-                                    use_container_width=True,
+                                pdf_download_link(
+                                    pdf_data,
+                                    f"class_{class_name.replace(' ', '_')}.pdf",
+                                    "📄 PDF",
                                 )
                         except Exception:
                             pass
@@ -1827,11 +1839,10 @@ elif st.session_state.view == "history":
                             theme=row.get("Theme", ""),
                             duration=int(row.get("Duration", 0)) if row.get("Duration") else 0,
                         )
-                        st.download_button(
-                            "📄 PDF", data=pdf_data, key=f"pdf_{i}",
-                            file_name=f"workout_{row.get('Date', 'export')}.pdf",
-                            mime="application/pdf", help="Download PDF",
-                            use_container_width=True,
+                        pdf_download_link(
+                            pdf_data,
+                            f"workout_{row.get('Date', 'export')}.pdf",
+                            "📄 PDF",
                         )
                 except Exception:
                     pass
